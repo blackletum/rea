@@ -317,3 +317,59 @@ describe("keyed archive decoding and graph limits", () => {
     );
   });
 });
+
+describe("AppKit keyed archive connectors", () => {
+  it("reads outlet and control connectors from NS-prefixed keys", () => {
+    const parsed = parseInterfaceBuilderRecords({
+      $archiver: "NSKeyedArchiver",
+      $objects: [
+        "$null",
+        { $class: { UID: 6 } },
+        { $class: { UID: 7 } },
+        {
+          $class: { UID: 8 },
+          NSSource: { UID: 1 },
+          NSDestination: { UID: 2 },
+          NSLabel: { UID: 5 },
+        },
+        {
+          $class: { UID: 9 },
+          NSSource: { UID: 2 },
+          NSDestination: { UID: 1 },
+          NSLabel: { UID: 10 },
+        },
+        "o_button",
+        {
+          $classname: "NSCustomObject",
+          $classes: ["NSCustomObject", "NSObject"],
+        },
+        { $classname: "NSButton", $classes: ["NSButton", "NSObject"] },
+        {
+          $classname: "NSNibOutletConnector",
+          $classes: ["NSNibOutletConnector", "NSNibConnector", "NSObject"],
+        },
+        {
+          $classname: "NSNibControlConnector",
+          $classes: ["NSNibControlConnector", "NSNibConnector", "NSObject"],
+        },
+        "buttonClicked:",
+      ],
+      $top: {},
+    });
+
+    expect(parsed.connections).toEqual([
+      expect.objectContaining({
+        kind: "outlet",
+        source_id: "1",
+        destination_id: "2",
+        label: "o_button",
+      }),
+      expect.objectContaining({
+        kind: "action",
+        source_id: "1",
+        destination_id: "2",
+        label: "buttonClicked:",
+      }),
+    ]);
+  });
+});
