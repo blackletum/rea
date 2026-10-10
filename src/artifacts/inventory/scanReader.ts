@@ -1,6 +1,7 @@
 import { isAbsolute } from "node:path";
 
 import {
+  annotateEnglishUnicodeCaseCollisions,
   ArtifactPathRegistry,
   normalizeArtifactPath,
 } from "../ArtifactPaths.js";
@@ -52,20 +53,28 @@ interface ScanContext {
   readonly occurrenceByPath: Map<string, MutableOccurrence>;
   readonly registry: ArtifactPathRegistry;
   readonly expandedContainerIds: Set<string>;
+  readonly ownedReaders: ArtifactReader[];
 }
 
 export const scanReader = async (
   reader: ArtifactReader | undefined,
+  ownedReaders: ArtifactReader[],
   signal?: AbortSignal,
   integrity: ArtifactIntegrityPolicy = STRICT_INTEGRITY_POLICY,
 ): Promise<{
   readonly nodes: Map<string, ArtifactNode>;
   readonly occurrences: MutableOccurrence[];
   readonly pendingContradictions: PendingIntegrityContradiction[];
+  readonly caseCollisionLimitation: string | undefined;
 }> => {
   const { nodes, occurrences, pendingContradictions } = emptyScan();
   if (reader === undefined)
-    return { nodes, occurrences, pendingContradictions };
+    return {
+      nodes,
+      occurrences,
+      pendingContradictions,
+      caseCollisionLimitation: undefined,
+    };
   const context: ScanContext = {
     reader,
     signal,
@@ -76,6 +85,7 @@ export const scanReader = async (
     occurrenceByPath: new Map<string, MutableOccurrence>(),
     registry: new ArtifactPathRegistry(),
     expandedContainerIds: new Set<string>(),
+    ownedReaders,
   };
   await visitArtifactEntries(context, reader, "");
   // Archive directories may appear after their children. Resolve containment
@@ -87,7 +97,12 @@ export const scanReader = async (
         context.occurrenceByPath,
         context.expandedContainerIds,
       )?.occurrence_id ?? null;
-  return { nodes, occurrences, pendingContradictions };
+  return {
+    nodes,
+    occurrences,
+    pendingContradictions,
+    caseCollisionLimitation: annotateEnglishUnicodeCaseCollisions(occurrences),
+  };
 };
 
 const visitArtifactEntries = async (
@@ -99,13 +114,11 @@ const visitArtifactEntries = async (
     readonly reader: ArtifactReader;
     readonly prefix: string;
     readonly iterator: AsyncIterator<ArtifactEntry>;
-    readonly owned: boolean;
   }> = [
     {
       reader: currentReader,
       prefix,
       iterator: currentReader.entries(context.signal)[Symbol.asyncIterator](),
-      owned: false,
     },
   ];
   try {
@@ -115,7 +128,6 @@ const visitArtifactEntries = async (
       const next = await frame.iterator.next();
       if (next.done) {
         stack.pop();
-        if (frame.owned) await frame.reader.close();
         continue;
       }
       const entry = next.value;
@@ -164,27 +176,22 @@ const visitArtifactEntries = async (
       }
       context.occurrences.push(occurrence);
       context.occurrenceByPath.set(logicalPath, occurrence);
-      if (expandableAsar && digested?.mismatched !== true) {
+      if (expandableAsar && digested !== undefined && !digested.mismatched) {
         const nested = new AsarArtifactReader(entry.adapterKey);
+        context.ownedReaders.push(nested);
+        await nested.prepareContainer(digested.node.sha256, context.signal);
         // Only traversed containers can own members, not opaque ASAR-named files.
         context.expandedContainerIds.add(occurrence.occurrence_id);
         stack.push({
           reader: nested,
           prefix: logicalPath,
           iterator: nested.entries(context.signal)[Symbol.asyncIterator](),
-          owned: true,
         });
       }
     }
   } finally {
-    await Promise.allSettled(
-      stack
-        .filter(({ owned }) => owned)
-        .map(async ({ reader, iterator }) => {
-          await iterator.return?.();
-          await reader.close();
-        }),
-    );
+    // Readers remain owned by the inventory until its complete observation is built.
+    for (const { iterator } of stack) await iterator.return?.();
   }
 };
 

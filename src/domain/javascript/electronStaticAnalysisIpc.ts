@@ -7,6 +7,7 @@ import type {
 } from "./electronStaticAnalysisTypes.js";
 import {
   boundedExpression,
+  electronCalleeName,
   electronStaticValue,
   handlerKind,
 } from "./electronStaticAnalysisValues.js";
@@ -17,6 +18,7 @@ import {
   range,
 } from "./javascriptStaticAnalysisHelpers.js";
 import { semanticStaticPropertyName } from "./javascriptAstValues.js";
+import { compositeKey } from "../unicodeCodePointOrder.js";
 import type { JavaScriptFindingContext } from "./javascriptStaticAnalysisState.js";
 
 /** Inspect Electron IPC operations and validation candidates. */
@@ -35,7 +37,7 @@ const inspectIpcCall = (
   node: t.CallExpression,
   context: JavaScriptFindingContext,
 ): void => {
-  const name = calleeName(node.callee);
+  const name = electronCalleeName(node.callee, context);
   const descriptor = ipcDescriptor(name);
   if (descriptor === undefined) return;
   const channelNode = argumentNode(node.arguments[0]);
@@ -161,7 +163,14 @@ const addValidation = (
   };
   addLocatedFinding(context, {
     collection: context.accumulator.senderValidations,
-    key: `electron-validation\0${input.subject}\0${input.mechanism}\0${input.expected.status === "literal" ? String(input.expected.value) : input.expected.expression}`,
+    key: compositeKey([
+      "electron-validation",
+      input.subject,
+      input.mechanism,
+      input.expected.status === "literal"
+        ? String(input.expected.value)
+        : input.expected.expression,
+    ]),
     node,
     value: finding,
   });

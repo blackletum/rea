@@ -95,7 +95,7 @@ npx skills add morluto/rea --skill reverse-engineer-anything
 
 This installs agent instructions and bundled references, not REA MCP
 registration or analysis engines. Follow the skill's
-[conditional connection guide](https://github.com/morluto/rea/blob/main/skill-src/reverse-engineer-anything/SKILL.md#connect-only-when-needed).
+[conditional connection guide](https://github.com/morluto/rea/blob/main/.agents/skills/reverse-engineer-anything/SKILL.md#connect-only-when-needed).
 Working tools can be used immediately. If tools are missing, inspect the current
 client's registration with `doctor --client codex --json` (substitute its client
 ID), then plan repairs with `setup --client codex --dry-run --json`. Show and
@@ -135,9 +135,16 @@ listed after the table because its connector is not one of these files:
 | Antigravity        | `antigravity`    |
 | GitHub Copilot CLI | `copilot_cli`    |
 | Command Code       | `commandcode`    |
+| Qwen Code          | `qwen_code`      |
 | VS Code            | `vscode`         |
 | Grok Build         | `grok_build`     |
 | OMP                | `omp`            |
+
+For Qwen Code, setup registers `rea` in the `mcpServers` table of the
+user-level `~/.qwen/settings.json`, or `$QWEN_HOME/settings.json` when configured.
+Setup and doctor follow Qwen Code's tilde and working-directory-relative home
+overrides. Qwen Code also discovers personal skills in `~/.agents/skills`,
+where setup installs the bundled workflow.
 
 For OMP, setup writes a `type: "stdio"` entry to the user-level
 `~/.omp/agent/mcp.json`. It follows `PI_CONFIG_DIR`, an absolute
@@ -192,6 +199,19 @@ default. Hopper is a separate optional choice: setup shows its proposed
 installation or connection and requires its own explicit approval. It can also
 save verified paths for an existing Ghidra installation.
 
+The bundled skill is installed where each selected client discovers personal
+skills: Claude Code uses `~/.claude/skills` (or
+`$CLAUDE_CONFIG_DIR/skills` when configured), while other supported clients,
+including Qwen Code, use the shared `~/.agents/skills` directory. A mixed selection
+plans the relevant paths. Selecting the skill without a client uses the shared
+directory. Setup leaves existing skill copies in other locations untouched.
+
+`doctor --skill --json` verifies the selected copies against the bundled
+instructions and references. Consumers should use `identity.skill.state`,
+`installed_version`, and `installed_tool_count` for skill readiness. The
+obsolete `installed_catalog_digest` field has been removed; current catalog
+identity remains available at `identity.catalog`.
+
 After selection, review the plan's exact paths and changes and approve before
 REA writes files or installs Hopper. You can cancel at any prompt.
 
@@ -199,7 +219,7 @@ Before applying changes, REA checks your current configuration. The plan lists:
 
 - an existing Hopper installation, a verified existing Ghidra installation, or the official Hopper package it proposes to install;
 - each detected agent configuration path;
-- the REA skill destination;
+- each selected REA skill destination;
 - external software, network origins, integrity evidence, and package-manager
   commands.
 
@@ -290,7 +310,7 @@ vendor-defined limits, and a paid license is optional. REA reuses any detected
 installation and preserves Hopper during uninstall.
 
 The supported native host baseline is macOS 12+, Ubuntu 24.04+, Fedora 41+,
-64-bit Arch Linux, or CachyOS. Ghidra and IDA have their own provider-specific
+Nobara 44+, 64-bit Arch Linux, or CachyOS. Ghidra and IDA have their own provider-specific
 host requirements; Windows Ghidra uses the [experimental P0 boundary](windows-ghidra-p0.md).
 
 On macOS, approved setup downloads the official DMG, checks its published size
@@ -416,6 +436,17 @@ Closing or switching a target closes its bound Hopper document, shuts down REA's
 bridge and removes its temporary socket directory while preserving the Hopper
 application and unrelated documents. A `cleanup_incomplete`
 result identifies resources whose cleanup could not be verified.
+REA retains unresolved cleanup ownership and any confirmed shutdown phases.
+After addressing the reported failure, retry `close_binary` on the same
+connection. Unconfirmed document or process cleanup retains the target/application
+lease and prevents another client from launching against that owned resource.
+Once document and process closure are confirmed, the lease can be released even
+if temporary-file cleanup fails. Another client can then launch, but the owning
+client must finish its retained cleanup before starting again.
+An unconfirmed external document can be retried while its authenticated bridge
+remains connected. If that bridge has disconnected, another close cannot confirm
+the document: inspect and close the reported document in Hopper before ending
+the owning REA connection.
 
 ### Hopper in CI
 
@@ -448,8 +479,11 @@ and JDK 21. Each installation must include the native decompiler for the host
 architecture in `Ghidra/Features/Decompiler/os/<platform>/` or the corresponding
 `build/os/<platform>/` directory. Linux ARM64 uses `linux_arm_64`; official
 release archives may require you to build that native component separately.
-REA checks the executable prerequisite and does not build or install native
-tools, or change Gatekeeper quarantine settings.
+REA checks the executable prerequisite by inspecting the file's own executable
+header, so a native component built for another platform or architecture is
+reported as incompatible instead of being admitted from its directory name, and
+a header that cannot be read or recognized is reported as unknown. REA does not
+build or install native tools, or change Gatekeeper quarantine settings.
 
 The adapter exposes 25 read-only operations: thirteen inventory/name/search
 operations and twelve function-analysis operations. These cover metadata,
@@ -462,7 +496,7 @@ entry comments atomically and returns refreshed analysis. These session metadata
 edits leave executable bytes unchanged and are discarded on close. GUI controls
 require Hopper; Windows P0 remains read-only.
 
-Windows P0 admits native x86 and x86-64 PE applications on fixed local NTFS volumes.
+Windows P0 admits native x86 and x86-64 PE applications and DLLs on fixed local NTFS volumes.
 The npm package bundles native Job Object ownership, protected private runtime
 DACLs, and handle-based path admission; no separate addon installation is needed.
 See the [Windows Ghidra P0 guide](windows-ghidra-p0.md) for verified scope and
@@ -647,7 +681,8 @@ and other MCP servers. Purging removes only REA's cache and state under
 `~/.rea`. A client configuration that is malformed, unreadable, or at an unsafe
 path stops the operation before anything is removed, and a client that fails
 while being updated stops the remaining removals. A purge path that is a
-symbolic link is retained and reported rather than followed. See the
+symbolic link is retained and reported rather than followed. Uninstall checks
+REA's managed shared and Claude Code personal skill locations. See the
 [CLI guide](cli.md#output-and-exit-status) for exit statuses.
 
 ## MCP Registry
@@ -669,7 +704,7 @@ For a client that requires manual configuration, use:
   "mcpServers": {
     "rea": {
       "command": "npx",
-      "args": ["-y", "rea-agents@6.1.0", "mcp"]
+      "args": ["-y", "rea-agents@6.3.0", "mcp"]
     }
   }
 }

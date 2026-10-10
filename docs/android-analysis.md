@@ -118,10 +118,21 @@ selected overload. Native/abstract methods with no decompiled body report
   responses remain in Evidence. Source revision is populated only for bytes
   matching the audited release JAR.
 
+If a later step fails, the error's `details.partial_observation` retains the
+selected and resolved APK paths, digest, observed provider identity and versions,
+and each upstream request and reply collected before the failure. Failed replies
+remain available even when their payload cannot be interpreted. Cancellation
+also stops target hashing before provider admission.
+
 These operations do not execute the APK or provide split APK/AAB handling,
 signature validation, full resource-table semantics, native-library analysis or
-Android runtime capture. Existing artifact inventory/extraction tools can supply
-archive evidence. Project that Evidence with the execution-free inventory tool:
+Android runtime capture. An `.aab` suffix is a ZIP archive, not an APK, so
+Android tools and the application graph do not treat it as a standalone APK.
+Existing artifact inventory/extraction tools can supply archive evidence.
+Inventory keeps ZIP names that differ only in case and records that a
+case-insensitive destination cannot store both spellings. Extraction fails
+only when that destination directory cannot keep both names. Project that
+Evidence with the execution-free inventory tool:
 
 ```sh
 rea project-android-application-graph '{"inventory_evidence":[<inventory_artifact Evidence>]}'

@@ -10,26 +10,35 @@ for (const argument of arguments_)
     throw new Error(`Unknown skill metadata option: ${argument}`);
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-const sourceRoot = join(root, "skill-src/reverse-engineer-anything");
+const sourceRoot = join(root, ".agents/skills/reverse-engineer-anything");
 const outputRoot = join(root, "skills/reverse-engineer-anything");
 const check = arguments_.has("--check");
 const current = (
   await readFile(join(sourceRoot, "SKILL.md"), "utf8")
 ).replaceAll("\r\n", "\n");
+const cacheBust = String(Date.now());
 const { CATALOG_IDENTITY } = await import(
-  `${pathToFileURL(join(root, "dist/catalogIdentity.js")).href}?${String(Date.now())}`
+  `${pathToFileURL(join(root, "dist/catalogIdentity.js")).href}?${cacheBust}`
+);
+const { PRODUCT_IDENTITY } = await import(
+  `${pathToFileURL(join(root, "dist/identity.js")).href}?${cacheBust}`
 );
 if (/^\s{2}(?:tool_count|catalog_digest):/mu.test(current))
   throw new Error(
-    "Catalog metadata belongs in the generated skill, not skill-src",
+    "Catalog metadata belongs in the generated skill, not the authored source",
   );
 const versionLine = /^ {2}version: "[^"\r\n]+"$/mu;
 if (!versionLine.test(current))
   throw new Error("Missing authored skill version");
-const source = current.replace(
-  versionLine,
-  `$&\n  tool_count: ${String(CATALOG_IDENTITY.counts.mcp_tools)}`,
-);
+// A shipped skill must run the version it ships with, not whatever `@latest` resolves to.
+const latestSpecifier = PRODUCT_IDENTITY.packageSpecifier;
+const pinnedSpecifier = PRODUCT_IDENTITY.registrationPackageSpecifier;
+const source = current
+  .replace(
+    versionLine,
+    `$&\n  tool_count: ${String(CATALOG_IDENTITY.counts.mcp_tools)}`,
+  )
+  .replaceAll(latestSpecifier, pinnedSpecifier);
 const paths = await filePaths(sourceRoot);
 // Rebuild this owned output directory so removed references cannot survive a build.
 if (!check) await rm(outputRoot, { recursive: true, force: true });
