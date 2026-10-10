@@ -108,8 +108,8 @@ export class TerminalRenderer {
     const lines: string[] = [];
     for (let row = 0; row < this.#terminal.rows; row += 1) {
       const line = buffer.getLine(buffer.viewportY + row);
-      // Trailing blank cells carry no information beyond `columns`; dropping
-      // them keeps sparse screens from costing a full row per blank line.
+      // Keep normalized display text compact. It can differ in length from the
+      // original terminal geometry recorded by `columns`.
       lines.push(
         this.options
           .normalize(

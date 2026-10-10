@@ -26,7 +26,7 @@ it("omits trailing blank cells from visible lines without losing rows", async ()
   );
   const [frame] = frames;
   expect(frame?.lines).toEqual(["left  right", "", "  indented", ""]);
-  // Fixed-width rows remain recoverable from the recorded column count.
+  // These plain rows use identity normalization and can be padded for display.
   expect(frame?.lines.map((line) => line.padEnd(frame.columns, " "))).toEqual([
     "left  right         ",
     " ".repeat(20),
