@@ -39,6 +39,7 @@ export const gpuObjectSchema = z.strictObject({
   inspection: z.enum([
     "inventory",
     "complete",
+    "partial",
     "not-selected",
     "unsupported",
     "malformed",
@@ -72,7 +73,9 @@ export const gpuKernelSchema = z.strictObject({
     sgpr: count.nullable(),
     vgpr: count.nullable(),
     agpr: count.nullable(),
-    virtual: z.array(z.strictObject({ type: z.string(), count })),
+    virtual: z.array(
+      z.strictObject({ type: z.string(), count: count.nullable() }),
+    ),
   }),
   shared_bytes: count
     .nullable()

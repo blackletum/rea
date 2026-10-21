@@ -85,6 +85,8 @@ export const cubinFixture = (
     textRegisters?: number;
     globalRegisters?: number;
     name?: string;
+    globalRecords?: number;
+    globalAliases?: number;
   } = {},
 ): Buffer => {
   const name = options.name ?? "add_one";
@@ -94,13 +96,16 @@ export const cubinFixture = (
   symbols[29] = 0x10;
   symbols.writeUInt16LE(4, 30);
   symbols.writeBigUInt64LE(16n, 40);
-  const global = Buffer.from("042f0800010000000a000000", "hex");
-  global.writeUInt32LE(options.globalRegisters ?? 10, 8);
+  const record = Buffer.from("042f0800010000000a000000", "hex");
+  record.writeUInt32LE(options.globalRegisters ?? 10, 8);
+  const global = Buffer.alloc(record.length * (options.globalRecords ?? 1));
+  for (let offset = 0; offset < global.length; offset += record.length)
+    record.copy(global, offset);
   const info = Buffer.from(
     "03190c0004170c00000000000100080000f0110004170c00000000000000000000f02100",
     "hex",
   );
-  return elfFixture(
+  const result = elfFixture(
     190,
     [
       { name: ".strtab", type: 3, bytes: Buffer.from(`\0${name}\0`) },
@@ -125,11 +130,26 @@ export const cubinFixture = (
         info: 4,
         size: options.shared ?? 1056,
       },
+      ...Array.from({ length: (options.globalAliases ?? 1) - 1 }, () => ({
+        name: ".nv.info",
+        type: 0x70000000,
+        link: 3,
+        bytes: Buffer.alloc(0),
+      })),
     ],
     0x81,
   );
+  const table = Number(result.readBigUInt64LE(40));
+  for (let index = 8; index < result.readUInt16LE(60); index++) {
+    result.writeBigUInt64LE(
+      result.readBigUInt64LE(table + 5 * 64 + 24),
+      table + index * 64 + 24,
+    );
+    result.writeBigUInt64LE(BigInt(global.length), table + index * 64 + 32);
+  }
+  return result;
 };
-export const amdFixture = (hidden = false): Buffer => {
+export const amdFixture = (hidden = false, trailingNote?: Buffer): Buffer => {
   const args = [
     { ".offset": 0, ".size": 8, ".value_kind": "global_buffer" },
     {
@@ -162,7 +182,14 @@ export const amdFixture = (hidden = false): Buffer => {
   note.writeUInt32LE(32, 8);
   note.write("AMDGPU\0", 12);
   metadata.copy(note, 20);
-  return elfFixture(224, [{ name: ".note", type: 7, bytes: note }]);
+  return elfFixture(224, [
+    {
+      name: ".note",
+      type: 7,
+      bytes:
+        trailingNote === undefined ? note : Buffer.concat([note, trailingNote]),
+    },
+  ]);
 };
 export const cudaFixture = (
   compression: "none" | "zstd" = "none",

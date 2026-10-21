@@ -40,6 +40,36 @@ it("keeps dynamic and compound shared declarations unknown", () => {
   expect(row!.shared_bytes).toBeNull();
   expect(row!.representation).toBe("ptx-declarations");
 });
+it("sums bare names and every register range while preserving unsupported totals as unknown", () => {
+  const [row] = [
+    ...readPtxKernels(
+      ".entry k() { .reg .b32 r0, r1; .reg .b32 %r<4>, %s<8>; .reg .u32 %x; .reg .u32 unsupported[2]; .reg .u32 %y; .reg .pred p, %p<2>; ret; }",
+      "object",
+    ),
+  ];
+  expect(row!.registers.virtual).toEqual([
+    { type: ".b32", count: 14 },
+    { type: ".u32", count: null },
+    { type: ".pred", count: 3 },
+  ]);
+  expect(row!.limitations.join(" ")).toContain("count unknown");
+});
+it("does not round overflowing register totals or accept truncated ranges", () => {
+  for (const declaration of [
+    "%r<9007199254740991>, %s",
+    "%r<4",
+    "%r<0>",
+    "%r,",
+  ]) {
+    const [row] = [
+      ...readPtxKernels(
+        `.entry k() { .reg .b32 ${declaration}; ret; }`,
+        "object",
+      ),
+    ];
+    expect(row!.registers.virtual).toEqual([{ type: ".b32", count: null }]);
+  }
+});
 it.each([
   "/* unfinished",
   ".entry broken(",

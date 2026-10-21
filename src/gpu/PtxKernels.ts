@@ -75,6 +75,36 @@ const sizeOf = (type: string | undefined): number | null => {
   const match = /^\.(?:b|u|s|f)(8|16|32|64|128)$/u.exec(type ?? "");
   return match === null ? null : Number(match[1]) / 8;
 };
+/** Parse every declared register name/range; unsupported forms poison the type total. */
+const registerDeclaration = (
+  values: string[],
+): { type: string; count: number | null } => {
+  const firstName = values.findIndex((value) => !value.startsWith("."));
+  if (firstName <= 0) return { type: values.join(" "), count: null };
+  const type = values.slice(0, firstName).join(" ");
+  if (firstName !== 1 || !/^\.(?:pred|[busf](?:8|16|32|64|128))$/u.test(type))
+    return { type, count: null };
+  let at = firstName,
+    count = 0;
+  while (at < values.length) {
+    if (!/^%?[A-Za-z_$][\w$@.]*$/u.test(values[at++]!))
+      return { type, count: null };
+    let declared = 1;
+    if (values[at] === "<") {
+      const range = integer(values[at + 1]);
+      if (range === null || range === 0 || values[at + 2] !== ">")
+        return { type, count: null };
+      declared = range;
+      at += 3;
+    }
+    if (!Number.isSafeInteger(count + declared)) return { type, count: null };
+    count += declared;
+    if (at === values.length) return { type, count };
+    if (values[at++] !== "," || at === values.length)
+      return { type, count: null };
+  }
+  return { type, count: null };
+};
 const declaration = (
   source: string[],
 ): {
@@ -211,7 +241,7 @@ export function* readPtxKernels(
     }
     let end = t.end,
       shared: number | null = t.value === "{" ? 0 : null;
-    const virtual = new Map<string, number>();
+    const virtual = new Map<string, number | null>();
     if (t.value === "{") {
       let depth = 1;
       while (depth > 0) {
@@ -234,15 +264,16 @@ export function* readPtxKernels(
           declarationTokens.push(t.value);
         }
         if (kind === ".reg") {
-          const type = declarationTokens.find((value) => value.startsWith("."));
-          const vector = declarationTokens.indexOf("<");
-          const count =
-            vector < 0
-              ? declarationTokens.filter((value) => value.startsWith("%"))
-                  .length
-              : integer(declarationTokens[vector + 1]);
-          if (type !== undefined && count !== null)
-            virtual.set(type, (virtual.get(type) ?? 0) + count);
+          const { type, count } = registerDeclaration(declarationTokens);
+          const previous = virtual.get(type);
+          const total =
+            previous === null || count === null
+              ? null
+              : (previous ?? 0) + count;
+          virtual.set(
+            type,
+            total === null || !Number.isSafeInteger(total) ? null : total,
+          );
         } else {
           const value = declaration(declarationTokens);
           if (
@@ -301,6 +332,10 @@ export function* readPtxKernels(
         "PTX registers are virtual declarations, not physical allocations. Parameter offsets/sizes and entry-local static shared bytes are derived from supported declarations; module shared bytes, dynamic allocation, device ABI and runtime allocation were not verified.",
       ],
     };
+    if (kernel.registers.virtual.some((row) => row.count === null))
+      kernel.limitations.push(
+        "Unsupported PTX register declarations or overflowing totals leave the affected virtual register count unknown.",
+      );
     if (++kernelCount > 65536)
       throw new BinaryResourceFailure(
         "structure",

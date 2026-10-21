@@ -160,9 +160,25 @@ export class GpuInventory {
         let preparedAmd: AmdElfMetadata | undefined;
         if (directory.machine === 224) {
           try {
-            preparedAmd = await readAmdElfMetadata(source, directory);
+            const metadata = await readAmdElfMetadata(source, directory);
+            preparedAmd = metadata.ok ? metadata.value : metadata.error.partial;
             this.#retain({ target: preparedAmd.target });
             row.target = preparedAmd.target;
+            if (!metadata.ok) {
+              if (this.input.analysis === "kernels" && this.#selected(row))
+                await this.#elfFacts(
+                  {
+                    size: source.size,
+                    containerId: row.id,
+                    read: (offset, size) => source.read(offset, size),
+                  },
+                  row,
+                  "amdgpu",
+                  preparedAmd,
+                );
+              this.#retainFailure(row, metadata.error.cause);
+              return directory.format;
+            }
           } catch (cause) {
             this.#retainFailure(row, cause);
             return directory.format;
@@ -226,8 +242,15 @@ export class GpuInventory {
       return directory.format;
     }
     // PTX is positively identified by its directives, never by extension or arbitrary embedded text.
-    const probe = await source.read(0, Math.min(source.size, 64 * 1024));
-    const target = readPtxTarget(probe.toString("utf8"));
+    let probe = await source.read(0, Math.min(source.size, 64 * 1024));
+    let target = readPtxTarget(probe.toString("utf8"));
+    if (
+      target === null &&
+      probe.length < Math.min(source.size, GPU_REPORT_BYTES)
+    ) {
+      probe = await source.read(0, Math.min(source.size, GPU_REPORT_BYTES));
+      target = readPtxTarget(probe.toString("utf8"));
+    }
     if (target !== null) {
       const row = gpuObject(source, {
         offset: 0,
@@ -236,9 +259,20 @@ export class GpuInventory {
       });
       row.target = target;
       this.#add(row);
-      await this.#payload(source, row);
+      await this.#payload(
+        probe.length === source.size
+          ? new GpuBufferSource(probe, source.containerId)
+          : source,
+        row,
+      );
       return "ptx";
     }
+    if (probe.length < source.size)
+      throw new BinaryResourceFailure(
+        "structure",
+        GPU_REPORT_BYTES,
+        "Standalone text recognition exceeds the 16 MiB PTX budget before a target was established",
+      );
     throw new BinaryFormatFailure(
       "unsupported",
       "No supported CUDA/HIP container or PTX declarations were identified",
@@ -274,6 +308,7 @@ export class GpuInventory {
       return;
     }
     try {
+      let coverage: "complete" | "partial" = "complete";
       if (
         row.kind === "ptx" &&
         (row.decoded_size === null || row.decoded_size > GPU_REPORT_BYTES)
@@ -339,24 +374,13 @@ export class GpuInventory {
         this.#retain(artifact);
         this.ptx_artifacts.push(artifact);
         for (const kernel of parsed) {
+          if (kernel.registers.virtual.some((r) => r.count === null))
+            coverage = "partial";
           this.#retain(kernel);
           this.kernels.push(kernel);
         }
       } else if (row.kind === "cubin" || row.kind === "amdgpu") {
-        const parsed = await readGpuElfKernels(
-          decoded,
-          row.kind,
-          (kernel) => {
-            this.#retain(kernel);
-            this.kernels.push(kernel);
-          },
-          preparedAmd,
-        );
-        if (row.target === null) {
-          this.#retain({ target: parsed.target });
-          row.target = parsed.target;
-        }
-        this.#objectLimitations(row, parsed.limitations);
+        coverage = await this.#elfFacts(decoded, row, row.kind, preparedAmd);
       } else {
         row.inspection = "unsupported";
         this.#objectLimitations(row, [
@@ -364,10 +388,32 @@ export class GpuInventory {
         ]);
         return;
       }
-      row.inspection = "complete";
+      row.inspection = coverage;
     } catch (cause) {
       this.#retainFailure(row, cause);
     }
+  }
+  async #elfFacts(
+    source: GpuSource,
+    row: GpuObject,
+    kind: "cubin" | "amdgpu",
+    preparedAmd?: AmdElfMetadata,
+  ): Promise<"complete" | "partial"> {
+    const parsed = await readGpuElfKernels(
+      source,
+      kind,
+      (kernel) => {
+        this.#retain(kernel);
+        this.kernels.push(kernel);
+      },
+      preparedAmd,
+    );
+    if (row.target === null) {
+      this.#retain({ target: parsed.target });
+      row.target = parsed.target;
+    }
+    this.#objectLimitations(row, parsed.limitations);
+    return parsed.coverage;
   }
   async #cuda(source: GpuSource): Promise<void> {
     for await (const row of readCudaFatbinary(source, this.signal)) {

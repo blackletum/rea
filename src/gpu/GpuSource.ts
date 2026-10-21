@@ -103,7 +103,7 @@ export class GpuBufferSource implements GpuSource {
   readonly size: number;
   constructor(
     readonly bytes: Buffer,
-    readonly containerId: string,
+    readonly containerId: string | null,
   ) {
     this.size = bytes.length;
   }

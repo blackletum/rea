@@ -18,6 +18,7 @@ import {
   ccobFixture,
   ptxFixture,
   amdFixture,
+  cubinFixture,
 } from "../fixtures/gpu/codeObjects.js";
 
 cliTest(
@@ -92,6 +93,56 @@ cliTest(
     }
   },
 );
+
+it("preserves incomplete decoder coverage through MCP target and object pages", async () => {
+  const root = await createTestTempDirectory("rea-gpu-partial-"),
+    { call } = await connectLocalToolsMcp();
+  for (const missing of ["section-names", "symbols", "later-amd-note"]) {
+    const bytes =
+        missing === "later-amd-note"
+          ? amdFixture(false, Buffer.alloc(3))
+          : cubinFixture(),
+      path = join(root, missing);
+    if (missing === "section-names") bytes.writeUInt16LE(0, 62);
+    else if (missing === "symbols")
+      bytes.writeUInt32LE(1, Number(bytes.readBigUInt64LE(40)) + 3 * 64 + 4);
+    await writeFile(path, bytes);
+    const reply = await call("inspect_gpu_code_objects", {
+      path,
+      analysis: "kernels",
+      view: { collection: "targets" },
+    });
+    expect(reply.isError, JSON.stringify(reply)).not.toBe(true);
+    const targets = gpuCodeObjectsPageViewResultSchema.parse(
+      parseEvidence(reply.structuredContent).normalized_result,
+    );
+    expect(targets.source_coverage.payloads).toBe("partial");
+    expect(targets.items).toEqual([
+      expect.objectContaining({
+        target:
+          missing === "later-amd-note" ? "amdgcn-amd-amdhsa--gfx900" : "sm_80",
+        kernel_count: missing === "symbols" ? 0 : 1,
+        kernel_coverage: "partial",
+      }),
+    ]);
+    const objectReply = await call("inspect_analysis_view", {
+      source: {
+        kind: "retained-evidence",
+        evidence_id: targets.parent_evidence_id,
+      },
+      view: { kind: "gpu-code-objects", collection: "objects" },
+    });
+    expect(objectReply.isError, JSON.stringify(objectReply)).not.toBe(true);
+    const objects = gpuCodeObjectsPageViewResultSchema.parse(
+      parseEvidence(objectReply.structuredContent).normalized_result,
+    );
+    expect(objects.items).toEqual([
+      expect.objectContaining({
+        inspection: missing === "later-amd-note" ? "malformed" : "partial",
+      }),
+    ]);
+  }
+});
 
 it("retains selected kernel facts and complete PTX for historical MCP pages after source removal", async () => {
   const root = await createTestTempDirectory("rea-gpu-mcp-"),

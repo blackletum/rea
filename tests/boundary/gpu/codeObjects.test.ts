@@ -164,6 +164,119 @@ it("reads PE raw-size fallback and ELF-host section locations", async () => {
     );
   }
 });
+it("coalesces aliased CUDA metadata before expanding the temporary index", async () => {
+  const bytes = cubinFixture({ globalRecords: 65536, globalAliases: 1024 });
+  expect(bytes.length).toBeLessThan(1024 * 1024);
+  const result = await inspect(bytes);
+  if (!result.ok) throw result.error;
+  expect(result.value.objects[0]!.inspection).toBe("complete");
+  expect(result.value.kernels).toHaveLength(1);
+  expect(result.value.kernels[0]!.registers.physical).toBe(10);
+});
+it("retains unknown PTX virtual counts and partial payload coverage", async () => {
+  const result = await inspect(
+    Buffer.from(ptxFixture.replace("%r<9>", "r0, r1, %r<4>, %s<8>")),
+  );
+  if (!result.ok) throw result.error;
+  expect(result.value.kernels[0]!.registers.virtual[0]).toEqual({
+    type: ".b32",
+    count: 14,
+  });
+  const unsupported = await inspect(
+    Buffer.from(ptxFixture.replace("%r<9>", "%r[4]")),
+  );
+  if (!unsupported.ok) throw unsupported.error;
+  expect(unsupported.value.objects[0]!.inspection).toBe("partial");
+  expect(unsupported.value.coverage.payloads).toBe("partial");
+  expect(unsupported.value.kernels[0]!.registers.virtual[0]).toEqual({
+    type: ".b32",
+    count: null,
+  });
+});
+it.each(["whitespace", "comment"] as const)(
+  "recognizes standalone PTX after more than 64 KiB of leading %s",
+  async (kind) => {
+    const prefix =
+      kind === "whitespace"
+        ? " ".repeat(70 * 1024)
+        : `/*${"x".repeat(70 * 1024)}*/\n`;
+    const bytes = Buffer.from(prefix + ptxFixture);
+    const inventory = await inspect(bytes, { analysis: "inventory" });
+    const selected = await inspect(bytes, { targets: ["sm_80"] });
+    if (!inventory.ok) throw inventory.error;
+    if (!selected.ok) throw selected.error;
+    expect(inventory.value.objects[0]!.target).toBe("sm_80");
+    expect(selected.value.kernels).toHaveLength(1);
+    expect(selected.value.kernels[0]!.location.offset).toBeGreaterThan(
+      64 * 1024,
+    );
+  },
+);
+it.each(["truncated", "invalid", "extension"] as const)(
+  "retains earlier AMD kernel declarations after a later %s note",
+  async (kind) => {
+    const tail = Buffer.alloc(kind === "truncated" ? 3 : 24);
+    if (kind !== "truncated") {
+      tail.writeUInt32LE(7, 0);
+      tail.writeUInt32LE(kind === "invalid" ? 1 : 3, 4);
+      tail.writeUInt32LE(32, 8);
+      tail.write("AMDGPU\0", 12);
+      tail[20] = kind === "invalid" ? 0xc1 : 0xd4;
+    }
+    for (const bytes of [
+      amdFixture(false, tail),
+      hipFixture(amdFixture(false, tail)),
+    ]) {
+      const result = await inspect(bytes);
+      if (!result.ok) throw result.error;
+      expect(result.value.kernels).toHaveLength(1);
+      expect(result.value.kernels[0]).toMatchObject({
+        name: "add_one",
+        parameter_bytes: 12,
+        registers: { sgpr: 6, vgpr: 2 },
+      });
+      expect(
+        result.value.objects.find((row) => row.kind === "amdgpu")!.inspection,
+      ).toBe(kind === "extension" ? "unsupported" : "malformed");
+      expect(result.value.coverage.payloads).toBe("partial");
+    }
+  },
+);
+it("bounds cumulative CUDA records across separate in-range metadata sections", async () => {
+  const record = Buffer.from("042f0800010000000a000000", "hex"),
+    records = Buffer.alloc(record.length * 131073);
+  for (let offset = 0; offset < records.length; offset += record.length)
+    record.copy(records, offset);
+  const result = await inspect(
+    elfFixture(190, [
+      { name: ".nv.info", type: 0x70000000, bytes: records },
+      { name: ".nv.info", type: 0x70000000, bytes: records },
+    ]),
+  );
+  if (!result.ok) throw result.error;
+  expect(result.value.objects[0]!.inspection).toBe("capacity");
+  expect(result.value.objects[0]!.limitations.join(" ")).toContain(
+    "aggregate record/symbol visits",
+  );
+});
+it.each(["section-names", "symbols"] as const)(
+  "retains partial CUBIN coverage when %s are unavailable",
+  async (missing) => {
+    const bytes = cubinFixture();
+    if (missing === "section-names") bytes.writeUInt16LE(0, 62);
+    else bytes.writeUInt32LE(1, Number(bytes.readBigUInt64LE(40)) + 3 * 64 + 4);
+    const result = await inspect(bytes);
+    if (!result.ok) throw result.error;
+    expect(result.value.objects[0]!.inspection).toBe("partial");
+    expect(result.value.coverage.payloads).toBe("partial");
+    expect(result.value.kernels).toHaveLength(missing === "symbols" ? 0 : 1);
+    expect(result.value.objects[0]!.limitations.join(" ")).toContain(
+      missing === "symbols"
+        ? "kernel declaration coverage is unknown"
+        : "named metadata coverage is partial",
+    );
+  },
+);
 it("preserves parameters for long mangled names and rejects conflicting register counts", async () => {
   const name = "kernel_" + "argument".repeat(64);
   const result = await inspect(

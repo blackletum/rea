@@ -25,5 +25,5 @@ it("bounds dense numeric record streams without retaining a record array", () =>
     for (const record of readCudaInfo(bytes, true)) {
       if (record.format !== 1) throw new Error("unexpected source format");
     }
-  }).toThrow(/allocation budget/u);
+  }).toThrow(/aggregate record\/symbol visits/u);
 });
