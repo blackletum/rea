@@ -1,0 +1,435 @@
+{
+  "date": "2026-10-21",
+  "runtime_source_revision": "c29b98da653658e5e8b2d8c601fb3ed890ed74f8",
+  "runtime_source_tree": "50940bbf829fd9a757fc1fd5c64296b29bd246a9",
+  "equivalent_rewritten_revision": "58cccca5123250104033dfde4efcbee89af57f63",
+  "node": "24.18.0",
+  "npm": "11.16.0",
+  "host": "Linux-6.1.0-54-cloud-amd64-x86_64-with-glibc2.36",
+  "cpu_affinity": [0, 1],
+  "heap_limit_mib": 3072,
+  "guard": {
+    "family_rss_bytes": 8589934592,
+    "wall_s": 420,
+    "sample_ms": 20,
+    "accounting": "Sum payload descendants through all task child lists; RUSAGE_CHILDREN delta for CPU. Observer excluded; sampled peak is approximate."
+  },
+  "published_artifacts": {
+    "nvjpeg-receipt": {
+      "url": "https://developer.download.nvidia.com/compute/cuda/redist/libnvjpeg/linux-x86_64/libnvjpeg-linux-x86_64-12.4.0.76-archive.tar.xz",
+      "manifest": {
+        "relative_path": "libnvjpeg/linux-x86_64/libnvjpeg-linux-x86_64-12.4.0.76-archive.tar.xz",
+        "sha256": "ddd8245b2803f5b55211261d7e5d7abf803c05f3b032238d0feaa6e09ea9401d",
+        "md5": "b9f7806fb279c9cdd0b4a40e4171b87b",
+        "size": "6378624"
+      }
+    },
+    "nvjpeg-windows-receipt": {
+      "url": "https://developer.download.nvidia.com/compute/cuda/redist/libnvjpeg/windows-x86_64/libnvjpeg-windows-x86_64-12.4.0.76-archive.zip",
+      "archive": {
+        "relative_path": "libnvjpeg/windows-x86_64/libnvjpeg-windows-x86_64-12.4.0.76-archive.zip",
+        "sha256": "b253241fc88bf30947b8ee068101aca8930960f113d8ee4a9583de021a79ffa1",
+        "md5": "d19d13f9bd3dbc9c9361a3c1fee99dd5",
+        "size": "4667529"
+      },
+      "files": [
+        {
+          "member": "libnvjpeg-windows-x86_64-12.4.0.76-archive/bin/nvjpeg64_12.dll",
+          "path": "/home/yann/yann/rea-5345-lab/fixtures/nvjpeg64_12.dll",
+          "size": 7664128,
+          "sha256": "26559f5319f6b947912daded08680ab248d5af7867529402af050b38b53193ff"
+        }
+      ]
+    },
+    "toolchain-receipts": [
+      {
+        "component": "cuda_nvcc",
+        "url": "https://developer.download.nvidia.com/compute/cuda/redist/cuda_nvcc/linux-x86_64/cuda_nvcc-linux-x86_64-12.9.86-archive.tar.xz",
+        "sha256": "7a1a5b652e5ef85c82b721d10672fc9a2dbaab44e9bd3c65a69517bf53998c35",
+        "archive_bytes": 81100244
+      },
+      {
+        "component": "cuda_cudart",
+        "url": "https://developer.download.nvidia.com/compute/cuda/redist/cuda_cudart/linux-x86_64/cuda_cudart-linux-x86_64-12.9.79-archive.tar.xz",
+        "sha256": "1f6ad42d4f530b24bfa35894ccf6b7209d2354f59101fd62ec4a6192a184ce99",
+        "archive_bytes": 1514676
+      },
+      {
+        "component": "cuda_cuobjdump",
+        "url": "https://developer.download.nvidia.com/compute/cuda/redist/cuda_cuobjdump/linux-x86_64/cuda_cuobjdump-linux-x86_64-12.9.82-archive.tar.xz",
+        "sha256": "ee0de40e8c18068bfcc53e73510e7e7a1a80555205347940df67fa525d24452f",
+        "archive_bytes": 214896
+      }
+    ],
+    "linux_library": {
+      "sha256": "27e1eb1834b20db64f99deba379746d8ec46b92975ccb4cdfa06a84d77e4c11e",
+      "bytes": 9352784,
+      "prior_full_oracle": {
+        "cubins": 165,
+        "ptx": 10,
+        "native_kernel_resource_tuples": 3720,
+        "ptx_kernel_declarations": 248,
+        "result": "All decoded hashes, PTX bytes and native resource tuples matched cuobjdump; final MCP rechecked the 248 sm_100 kernel facts."
+      }
+    }
+  },
+  "completed_tasks": {
+    "final-full": {
+      "resource_receipt": {
+        "command": [
+          "taskset",
+          "-c",
+          "0,1",
+          "node",
+          "/home/yann/yann/rea-5345-lab/bench.mjs",
+          "/home/yann/yann/rea-5345-gpu-code-objects",
+          "final-full",
+          "full"
+        ],
+        "exit_code": 0,
+        "wall_s": 15.492352435998328,
+        "cpu_s": 18.220271,
+        "cpu_accounting": "payload family wait rusage delta; inherited shell child usage excluded",
+        "peak_family_rss_bytes": 1139601408,
+        "sample_ms": 20,
+        "guard_stop": null
+      },
+      "task_receipt": {
+        "runtime": "/home/yann/yann/rea-5345-gpu-code-objects",
+        "label": "final-full",
+        "mode": "full",
+        "target": "/home/yann/yann/rea-5345-lab/fixtures/libnvjpeg.so.12.4.0.76",
+        "task": "Read sm_100 parameter layout, physical registers and shared memory for the named kernel, retain source Evidence and repeat the historical query three times",
+        "answer": [
+          {
+            "name": "_ZN6nvjpeg33dctQuantInvJpegKernelMultiChannelI7ushort2Li1ELi32ELi8EEEvNS_24InvDctParamsMultiChannelE",
+            "n": 1,
+            "bytes": 168,
+            "parameters": [
+              {
+                "ordinal": 0,
+                "name": null,
+                "offset": 0,
+                "size": 168,
+                "type": null,
+                "hidden": null
+              }
+            ],
+            "registers": {
+              "physical": 31,
+              "sgpr": null,
+              "vgpr": null,
+              "agpr": null,
+              "virtual": []
+            },
+            "shared": 9216
+          }
+        ],
+        "objects": 176,
+        "kernels": 248,
+        "coverage": {
+          "discovery": "complete",
+          "discovery_scope": "supported-section-names-and-standalone-formats",
+          "examined_sections": 33,
+          "payloads": "partial",
+          "unknown_section_names": 0
+        },
+        "used_input_declarations_plus_primary_estimated_tokens": 406862,
+        "all_input_declarations_plus_primary_estimated_tokens": 635381,
+        "catalog_and_all_calls_estimated_tokens": 1475258,
+        "token_accounting": "tokenx estimates of advertised declarations, arguments and full SDK replies; initialize and JSON-RPC envelopes omitted; not actual model usage",
+        "task_wall_s": 14.997796184999999,
+        "call_times_ms": [
+          {
+            "name": "inspect_gpu_code_objects",
+            "wall_ms": 8572.237158
+          },
+          {
+            "name": "inspect_analysis_view",
+            "wall_ms": 410.12681299999895
+          },
+          {
+            "name": "export_evidence_bundle",
+            "wall_ms": 38.289639000000534
+          },
+          {
+            "name": "inspect_analysis_view",
+            "wall_ms": 10.732239999999365
+          },
+          {
+            "name": "inspect_analysis_view",
+            "wall_ms": 10.636399999999412
+          },
+          {
+            "name": "inspect_analysis_view",
+            "wall_ms": 9.782919999999649
+          }
+        ]
+      }
+    },
+    "final-selected": {
+      "resource_receipt": {
+        "command": [
+          "taskset",
+          "-c",
+          "0,1",
+          "node",
+          "/home/yann/yann/rea-5345-lab/bench.mjs",
+          "/home/yann/yann/rea-5345-gpu-code-objects",
+          "final-selected",
+          "selected"
+        ],
+        "exit_code": 0,
+        "wall_s": 15.442506011997466,
+        "cpu_s": 18.074447000000003,
+        "cpu_accounting": "payload family wait rusage delta; inherited shell child usage excluded",
+        "peak_family_rss_bytes": 1321566208,
+        "sample_ms": 20,
+        "guard_stop": null
+      },
+      "task_receipt": {
+        "runtime": "/home/yann/yann/rea-5345-gpu-code-objects",
+        "label": "final-selected",
+        "mode": "selected",
+        "target": "/home/yann/yann/rea-5345-lab/fixtures/libnvjpeg.so.12.4.0.76",
+        "task": "Read sm_100 parameter layout, physical registers and shared memory for the named kernel, retain source Evidence and repeat the historical query three times",
+        "answer": [
+          {
+            "name": "_ZN6nvjpeg33dctQuantInvJpegKernelMultiChannelI7ushort2Li1ELi32ELi8EEEvNS_24InvDctParamsMultiChannelE",
+            "n": 1,
+            "bytes": 168,
+            "parameters": [
+              {
+                "ordinal": 0,
+                "name": null,
+                "offset": 0,
+                "size": 168,
+                "type": null,
+                "hidden": null
+              }
+            ],
+            "registers": {
+              "physical": 31,
+              "sgpr": null,
+              "vgpr": null,
+              "agpr": null,
+              "virtual": []
+            },
+            "shared": 9216
+          }
+        ],
+        "objects": 176,
+        "kernels": 248,
+        "coverage": {
+          "discovery": "complete",
+          "discovery_scope": "supported-section-names-and-standalone-formats",
+          "examined_sections": 33,
+          "payloads": "partial",
+          "unknown_section_names": 0
+        },
+        "used_input_declarations_plus_primary_estimated_tokens": 26106,
+        "all_input_declarations_plus_primary_estimated_tokens": 254625,
+        "catalog_and_all_calls_estimated_tokens": 1094502,
+        "token_accounting": "tokenx estimates of advertised declarations, arguments and full SDK replies; initialize and JSON-RPC envelopes omitted; not actual model usage",
+        "task_wall_s": 14.924958990999999,
+        "call_times_ms": [
+          {
+            "name": "inspect_gpu_code_objects",
+            "wall_ms": 8809.613411
+          },
+          {
+            "name": "inspect_analysis_view",
+            "wall_ms": 435.95342300000084
+          },
+          {
+            "name": "export_evidence_bundle",
+            "wall_ms": 32.59329000000071
+          },
+          {
+            "name": "inspect_analysis_view",
+            "wall_ms": 11.959560000001147
+          },
+          {
+            "name": "inspect_analysis_view",
+            "wall_ms": 11.40408000000025
+          },
+          {
+            "name": "inspect_analysis_view",
+            "wall_ms": 10.63430000000153
+          }
+        ]
+      }
+    },
+    "final-windows-cli": {
+      "resource_receipt": {
+        "command": [
+          "taskset",
+          "-c",
+          "0,1",
+          "node",
+          "scripts/rea.mjs",
+          "inspect-gpu-code-objects",
+          "/home/yann/yann/rea-5345-lab/fixtures/nvjpeg64_12.dll",
+          "--analysis",
+          "kernels",
+          "--detail",
+          "summary",
+          "--view",
+          "{\"collection\":\"targets\"}",
+          "--evidence_output",
+          "/home/yann/yann/rea-5345-lab/final-windows-evidence.json",
+          "--json"
+        ],
+        "exit_code": 0,
+        "wall_s": 4.06407550899894,
+        "cpu_s": 4.908962,
+        "cpu_accounting": "payload family wait rusage delta; inherited shell child usage excluded",
+        "peak_family_rss_bytes": 503459840,
+        "sample_ms": 20,
+        "guard_stop": null
+      }
+    },
+    "final-producer-fixtures": {
+      "resource_receipt": {
+        "command": [
+          "taskset",
+          "-c",
+          "0,1",
+          "node",
+          "--import",
+          "tsx",
+          "/home/yann/yann/rea-5345-lab/probe.mts"
+        ],
+        "exit_code": 0,
+        "wall_s": 0.8731043400002818,
+        "cpu_s": 1.1189369999999998,
+        "cpu_accounting": "payload family wait rusage delta; inherited shell child usage excluded",
+        "peak_family_rss_bytes": 123265024,
+        "sample_ms": 20,
+        "guard_stop": null
+      }
+    },
+    "final-focused": {
+      "resource_receipt": {
+        "command": [
+          "taskset",
+          "-c",
+          "0,1",
+          "npm",
+          "run",
+          "test:focused",
+          "--",
+          "tests/acceptance/gpuCodeObjectsCli.test.ts",
+          "tests/boundary/gpu/codeObjects.test.ts",
+          "tests/process-global/gpuFileLifetime.test.ts",
+          "src/domain/gpu/gpuCodeObjects.test.ts",
+          "src/gpu/AmdGpuMetadata.test.ts",
+          "src/gpu/CudaInfo.test.ts",
+          "src/gpu/Lz4Block.test.ts",
+          "src/gpu/PtxKernels.test.ts",
+          "src/gpu/GpuInventory.test.ts",
+          "src/gpu/GpuPayloadCodec.test.ts",
+          "src/domain/elfFixedHeader.test.ts",
+          "src/native/metadata/PeImage.test.ts",
+          "src/native/metadata/Il2cppContainer.test.ts",
+          "tests/boundary/go/goBinaryMappings.test.ts",
+          "tests/boundary/go/goBinaryImage.test.ts",
+          "tests/boundary/rust/rustBinaryImage.test.ts",
+          "src/rust/RustAuditableReader.test.ts",
+          "tests/boundary/il2cpp/il2cppBinaryFile.test.ts",
+          "tests/boundary/mcp/outputSchemaProfile.test.ts"
+        ],
+        "exit_code": 0,
+        "wall_s": 75.88229032499657,
+        "cpu_s": 136.819571,
+        "cpu_accounting": "payload family wait rusage delta; inherited shell child usage excluded",
+        "peak_family_rss_bytes": 3480600576,
+        "sample_ms": 20,
+        "guard_stop": null
+      }
+    },
+    "final-check": {
+      "resource_receipt": {
+        "command": ["taskset", "-c", "0,1", "npm", "run", "check"],
+        "exit_code": 0,
+        "wall_s": 147.5841734400001,
+        "cpu_s": 292.92577,
+        "cpu_accounting": "payload family wait rusage delta; inherited shell child usage excluded",
+        "peak_family_rss_bytes": 6866296832,
+        "sample_ms": 20,
+        "guard_stop": null
+      }
+    },
+    "qualified-docs-4": {
+      "resource_receipt": {
+        "command": ["taskset", "-c", "0,1", "npm", "run", "docs:check"],
+        "exit_code": 0,
+        "wall_s": 9.546646034999867,
+        "cpu_s": 11.63225,
+        "cpu_accounting": "payload family wait rusage delta; inherited shell child usage excluded",
+        "peak_family_rss_bytes": 752164864,
+        "sample_ms": 20,
+        "guard_stop": null
+      }
+    },
+    "schema-isolated": {
+      "resource_receipt": {
+        "command": [
+          "taskset",
+          "-c",
+          "0,1",
+          "npm",
+          "run",
+          "test:focused",
+          "--",
+          "tests/boundary/mcp/toolSchemaValidity.test.ts"
+        ],
+        "exit_code": 0,
+        "wall_s": 111.93744548900031,
+        "cpu_s": 140.419096,
+        "cpu_accounting": "payload family wait rusage delta; inherited shell child usage excluded",
+        "peak_family_rss_bytes": 3463942144,
+        "sample_ms": 20,
+        "guard_stop": null
+      }
+    }
+  },
+  "oracle_results": {
+    "final-linux-oracle": [
+      {
+        "mode": "final-full",
+        "kernel_facts": 248,
+        "result": "All previously oracle-verified fields match; new representation is cuda-elf-metadata; selected decoded hashes and source locations match"
+      },
+      {
+        "mode": "final-selected",
+        "kernel_facts": 248,
+        "result": "All previously oracle-verified fields match; new representation is cuda-elf-metadata; selected decoded hashes and source locations match"
+      }
+    ],
+    "final-windows-oracle": {
+      "input_sha256": "26559f5319f6b947912daded08680ab248d5af7867529402af050b38b53193ff",
+      "kernels": 3968,
+      "cubin_hashes": 165,
+      "ptx_byte_comparisons": 10,
+      "native_kernel_resource_tuples": 3720,
+      "result": "Final public CLI retained facts exactly equal previously independently verified producer-oracle facts",
+      "oracle_scope": "LLVM PE section coordinates; cuobjdump on extracted fatbin, no direct cuobjdump DLL or Windows runtime verification"
+    },
+    "windows-oracle-receipt": {
+      "cubin_hashes": 165,
+      "ptx_byte_comparisons": 10,
+      "native_kernel_resource_tuples": 3720,
+      "result": "all matched",
+      "scope": "PE section coordinates from LLVM; NVIDIA oracle consumes extracted fatbin, not DLL directly"
+    }
+  },
+  "limits": [
+    "No GPU execution or Windows runtime verification.",
+    "CCOB v2 Zstd has a real LLVM 19 producer oracle; v1/v3 and zlib have portable boundary fixtures. Legacy AMDGPU YAML is unsupported.",
+    "Fresh MCP servers and disabled Node compile cache; OS caches and unrelated host load uncontrolled. One final pair is not a latency distribution.",
+    "Tokenx estimates, not model billing. Full SDK replies include text and structured representations; initialization and JSON-RPC envelopes omitted.",
+    "Earlier all-target complete MCP response exceeded the existing transport guard and did not complete. It is not a baseline. Both completed comparisons select sm_100.",
+    "A prior combined focused run timed out two schema cases at 30 seconds on two CPUs; the isolated schema suite passed 15/15 without changing timeouts."
+  ]
+}
