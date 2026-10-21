@@ -7,6 +7,7 @@ import { gpuObject, gpuLocation } from "./GpuObject.js";
 import { readCudaFatbinary } from "./CudaFatbinary.js";
 import { decodeGpuPayload } from "./GpuPayloadCodec.js";
 import { createHash } from "node:crypto";
+import { scheduler } from "node:timers/promises";
 import type {
   GpuCodeObjectsInput,
   GpuCodeObjects,
@@ -352,7 +353,12 @@ export class GpuInventory {
   }
   async #hip(source: GpuSource, depth: number): Promise<void> {
     let base = 0;
+    let bundles = 0;
     while (base < source.size) {
+      if (++bundles % 128 === 0) {
+        await scheduler.yield();
+        assertArtifactReadActive(this.signal);
+      }
       const prefix = await source.read(base, Math.min(32, source.size - base));
       if (prefix.subarray(0, 24).equals(CLANG_BUNDLE_MAGIC)) {
         const directory = await readClangBundleDirectory(

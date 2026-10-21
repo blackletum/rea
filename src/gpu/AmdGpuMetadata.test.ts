@@ -34,3 +34,11 @@ it("preserves long leading-BOM map keys through the public decoder extension poi
     object = { [key]: 123 };
   expect(readAmdMetadata(Buffer.from(encode(object)))).toEqual(object);
 });
+it("distinguishes an unsupported extension tag from a forbidden MessagePack token", () => {
+  expect(() => readAmdMetadata(Buffer.from("d40000", "hex"))).toThrow(
+    expect.objectContaining({ kind: "unsupported" }),
+  );
+  expect(() => readAmdMetadata(Buffer.from("c1", "hex"))).toThrow(
+    expect.objectContaining({ kind: "malformed" }),
+  );
+});

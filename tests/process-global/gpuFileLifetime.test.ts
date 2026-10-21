@@ -1,5 +1,5 @@
 import { expect, it, vi } from "vitest";
-import { open, writeFile, unlink } from "node:fs/promises";
+import { open, writeFile, unlink, truncate } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import { join } from "node:path";
 import { GpuCodeObjectsProvider } from "../../src/gpu/GpuCodeObjectsProvider.js";
@@ -215,6 +215,33 @@ it("classifies removal of an admitted named source as changed identity", async (
   });
   try {
     const result = await provider.inspect({ path, analysis: "kernels" });
+    expect(result).toMatchObject({
+      ok: false,
+      error: { _tag: "AnalysisArtifactChangedError" },
+    });
+  } finally {
+    spy.mockRestore();
+    await provider.close();
+  }
+});
+it("reports a source shortened during the streaming hash as changed identity", async () => {
+  const { path, prototype, provider } = await fixture();
+  await writeFile(path, Buffer.alloc(2 * 1024 * 1024));
+  const read = prototype.read;
+  let shortened = false;
+  const spy = vi.spyOn(prototype, "read").mockImplementation(async function (
+    this: FileHandle,
+    ...args: Parameters<ReadFile>
+  ) {
+    const result = await read.apply(this, args);
+    if (!shortened) {
+      shortened = true;
+      await truncate(path, 0);
+    }
+    return result;
+  });
+  try {
+    const result = await provider.inspect({ path, analysis: "inventory" });
     expect(result).toMatchObject({
       ok: false,
       error: { _tag: "AnalysisArtifactChangedError" },

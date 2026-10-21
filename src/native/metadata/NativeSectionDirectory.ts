@@ -57,7 +57,7 @@ const request = (
     offset > BigInt(fileSize) ||
     size > BigInt(fileSize) - offset
   )
-    reject("Native directory range is outside the file");
+    reject("Native directory range is truncated or outside the file");
   if (size > BigInt(STRUCTURE_BYTES))
     throw new BinaryResourceFailure(
       "structure",

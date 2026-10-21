@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { createHash } from "node:crypto";
 import { digestSchema } from "../digests.js";
 import {
   absoluteLocalPathStringSchema,
@@ -88,16 +89,38 @@ export const gpuKernelSchema = z.strictObject({
   }),
   limitations: z.array(z.string()),
 });
-export const gpuPtxArtifactSchema = z.strictObject({
-  id: z.string(),
-  object_id: z.string(),
-  sha256: digestSchema,
-  media_type: z.literal("text/x-ptx"),
-  encoding: z.literal("utf-8"),
-  byte_length: count,
-  text: z.string(),
-  location: gpuLocationSchema,
-});
+export const gpuPtxArtifactSchema = z
+  .strictObject({
+    id: z.string(),
+    object_id: z.string(),
+    sha256: digestSchema,
+    media_type: z.literal("text/x-ptx"),
+    encoding: z.literal("utf-8"),
+    byte_length: count,
+    text: z.string(),
+    location: gpuLocationSchema,
+  })
+  .superRefine((artifact, context) => {
+    if (
+      /[\uD800-\uDFFF]/u.test(artifact.text) ||
+      Buffer.byteLength(artifact.text, "utf8") !== artifact.byte_length ||
+      artifact.location.size !== artifact.byte_length
+    )
+      context.addIssue({
+        code: "custom",
+        path: ["byte_length"],
+        message: "PTX text and its UTF-8 source extent disagree",
+      });
+    if (
+      createHash("sha256").update(artifact.text, "utf8").digest("hex") !==
+      artifact.sha256
+    )
+      context.addIssue({
+        code: "custom",
+        path: ["sha256"],
+        message: "PTX digest does not match retained UTF-8 text",
+      });
+  });
 export const gpuCodeObjectsObjectSchema = z.strictObject({
   artifact: z.strictObject({
     path: localPathStringSchema,

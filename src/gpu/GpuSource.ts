@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { FileHandle } from "node:fs/promises";
 import { assertArtifactReadActive } from "../artifacts/ArtifactFileOperation.js";
+import { ArtifactReaderFailure } from "../artifacts/ArtifactReader.js";
 import {
   BinaryFormatFailure,
   BinaryResourceFailure,
@@ -76,7 +77,10 @@ export class GpuFileSource implements GpuSource {
         offset + position,
       );
       if (result.bytesRead === 0)
-        rejectGpu("GPU source was truncated during inspection");
+        throw new ArtifactReaderFailure(
+          "integrity",
+          "GPU source was truncated during inspection",
+        );
       position += result.bytesRead;
       this.bytesRead += result.bytesRead;
     }

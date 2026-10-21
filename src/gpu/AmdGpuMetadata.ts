@@ -1,5 +1,8 @@
 import { decode } from "@msgpack/msgpack";
-import { BinaryResourceFailure } from "../native/metadata/BinaryContainer.js";
+import {
+  BinaryResourceFailure,
+  BinaryFormatFailure,
+} from "../native/metadata/BinaryContainer.js";
 import { rejectGpu } from "./GpuSource.js";
 
 /** Validate allocation and nesting costs before the standard decoder allocates containers. */
@@ -62,8 +65,14 @@ const preflight = (bytes: Buffer): Set<string> => {
         0xd3: 8,
       };
       const width = widths[code];
-      if (width === undefined)
-        rejectGpu("Unsupported AMDGPU MessagePack extension or token");
+      if (width === undefined) {
+        if ([0xc7, 0xc8, 0xc9, 0xd4, 0xd5, 0xd6, 0xd7, 0xd8].includes(code))
+          throw new BinaryFormatFailure(
+            "unsupported",
+            "AMDGPU MessagePack extensions are outside metadata coverage",
+          );
+        rejectGpu("Reserved AMDGPU MessagePack token");
+      }
       payload = width!;
     }
     if (count > 262144 - values || payload > 65536)
