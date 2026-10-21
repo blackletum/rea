@@ -25,13 +25,14 @@ const officialPackage = z
   .object({ version: z.string() })
   .parse(
     JSON.parse(
-      await readFile(require.resolve("typescript-native/package.json"), "utf8"),
+      await readFile(require.resolve("typescript/package.json"), "utf8"),
     ),
   );
 const execute = (script: string, args: string[]) =>
   spawnSync(process.execPath, [script, ...args], {
     encoding: "utf8",
     timeout: 15_000,
+    env: { ...process.env, TURBO_HASH: undefined },
   });
 
 it.each([
@@ -62,7 +63,7 @@ it("always retains the official compiler on Windows", () => {
   ).toBe("typescript");
 });
 
-it("runs the selected installed compiler at the shared TypeScript version", () => {
+it("runs the selected installed compiler", () => {
   const result = execute(launcher, ["--version"]);
   expect(result.error).toBeUndefined();
   expect(result.status, result.stderr).toBe(0);
@@ -71,9 +72,11 @@ it("runs the selected installed compiler at the shared TypeScript version", () =
     process.arch,
     rustPackage.optionalDependencies,
   );
-  expect(result.stdout).toContain(`Version ${officialPackage.version}`);
-  if (compiler === "tsrs")
-    expect(result.stdout).toContain(`tsrs ${rustPackage.version}`);
+  expect(result.stdout).toContain(
+    compiler === "tsrs"
+      ? `tsrs ${rustPackage.version}`
+      : `Version ${officialPackage.version}`,
+  );
 });
 
 it("forwards build arguments and preserves real type errors and exit status", async () => {
@@ -121,11 +124,7 @@ it.skipIf(process.platform === "win32")(
     const script = join(root, "run-typescript.mjs");
     await copyFile(launcher, script);
     for (const name of ["tsrs", "typescript"]) {
-      const directory = join(
-        root,
-        "node_modules",
-        name === "tsrs" ? name : "typescript-native",
-      );
+      const directory = join(root, "node_modules", name);
       await mkdir(directory, { recursive: true });
       await writeFile(
         join(directory, "package.json"),
@@ -165,5 +164,23 @@ it.skipIf(process.platform === "win32")(
     expect(missing.status, missing.stdout + missing.stderr).toBe(1);
     expect(missing.stderr).toContain("ERR_MODULE_NOT_FOUND");
     expect(missing.stdout).not.toContain("unexpected fallback");
+  },
+);
+
+it.each([undefined, "typescript@stale"])(
+  "rejects missing or stale compiler identity %s inside a Turbo task",
+  (identity) => {
+    const result = spawnSync(process.execPath, [launcher, "--version"], {
+      encoding: "utf8",
+      timeout: 15_000,
+      env: {
+        ...process.env,
+        TURBO_HASH: "compiler-task",
+        REA_TYPESCRIPT_COMPILER: identity,
+      },
+    });
+    expect(result.error).toBeUndefined();
+    expect(result.status, result.stdout + result.stderr).toBe(1);
+    expect(result.stderr).toContain("Compiler identity is missing or stale");
   },
 );

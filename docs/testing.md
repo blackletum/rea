@@ -49,17 +49,20 @@ Source typechecking needs no compiled runtime or generated test metadata.
 Typecheck, runtime compilation, and Frida binding verification share
 `scripts/run-typescript.mjs`. The pinned tsrs package supplies Linux x64/arm64
 (GNU and musl) and macOS arm64 compilers. Windows and other unsupported hosts
-retain the official Go TypeScript compiler through `typescript-native`, pinned
-to the matching 7.1 development snapshot to keep both host paths on the same
-upstream version. A missing binary on a supported host fails with the package's
-installation diagnostic; it does not silently fall back. The Rust compiler
-defaults to at most two checker threads. For `--noEmit` checks, `--maxMemory 3G`
-also sets a soft memory target; emit builds do not use that target. Explicit
-compiler arguments can override the defaults. These controls do not impose a
-process-family memory limit. Termux's explicit build and Stryker's compiler API
-dependency retain their existing TypeScript versions. The stable `typescript`
-package also remains for existing fixture oracles and Stryker's peer constraint,
-which does not admit prerelease versions.
+retain the existing stable official TypeScript compiler. Its upstream version
+can differ from tsrs, so both compiler tasks hash the selected package and version
+through `scripts/run-turbo.mjs` before cache lookup. Outputs from different
+compilers occupy different cache entries. Repository npm scripts and focused-test
+preparation use that entrypoint; a raw Turbo compiler task without matching
+identity fails instead of publishing an ambiguous successful cache entry.
+A missing binary on a supported host also fails without silently falling back.
+
+The Rust compiler defaults to at most two checker threads. For `--noEmit` checks,
+`--maxMemory 3G` also sets a soft memory target; emit builds do not use that target.
+Explicit compiler arguments can override the defaults. These controls do not
+impose a process-family memory limit. Termux's explicit build, Stryker's compiler
+API dependency, and independent fixture compiler oracles keep their existing
+TypeScript versions.
 
 `npm run build:cached` compiles the CLI/MCP runtime and its packaged skill.
 Turbo's strict task environment preserves caller-selected `GOMAXPROCS`,

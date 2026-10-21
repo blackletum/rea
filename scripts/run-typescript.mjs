@@ -21,7 +21,7 @@ export const selectTypeScriptCompiler = (
     : "typescript";
 };
 
-const main = async () => {
+export const resolveTypeScriptCompiler = () => {
   const require = createRequire(import.meta.url);
   const rustPackagePath = require.resolve("tsrs/package.json");
   const rustPackage = JSON.parse(readFileSync(rustPackagePath, "utf8"));
@@ -33,13 +33,29 @@ const main = async () => {
   const packagePath =
     compiler === "tsrs"
       ? rustPackagePath
-      : require.resolve("typescript-native/package.json");
+      : require.resolve("typescript/package.json");
   const metadata =
     compiler === "tsrs"
       ? rustPackage
       : JSON.parse(readFileSync(packagePath, "utf8"));
   const command = compiler === "tsrs" ? "tsrs" : "tsc";
-  if (compiler === "tsrs")
+  return {
+    name: compiler,
+    identity: `${compiler}@${metadata.version}`,
+    launcher: resolve(dirname(packagePath), metadata.bin[command]),
+  };
+};
+
+const main = async () => {
+  const compiler = resolveTypeScriptCompiler();
+  if (
+    process.env.TURBO_HASH !== undefined &&
+    process.env.REA_TYPESCRIPT_COMPILER !== compiler.identity
+  )
+    throw new Error(
+      "Compiler identity is missing or stale. Run Turbo through scripts/run-turbo.mjs.",
+    );
+  if (compiler.name === "tsrs")
     process.argv.splice(
       2,
       0,
@@ -50,9 +66,7 @@ const main = async () => {
     );
   // Delegate execution, diagnostics, status and signals to the package's launcher.
   // An unavailable binary on a supported host must fail rather than hide drift.
-  await import(
-    pathToFileURL(resolve(dirname(packagePath), metadata.bin[command])).href
-  );
+  await import(pathToFileURL(compiler.launcher).href);
 };
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) await main();
