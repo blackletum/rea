@@ -7,7 +7,10 @@ import { fileURLToPath } from "node:url";
 import { expect, it } from "vitest";
 import { z } from "zod";
 
-import { selectTypeScriptCompiler } from "../../../scripts/run-typescript.mjs";
+import {
+  resolveTypeScriptCompiler,
+  selectTypeScriptCompiler,
+} from "../../../scripts/run-typescript.mjs";
 import { createTestTempDirectory } from "../../fixtures/temporaryDirectory.js";
 
 const repository = fileURLToPath(new URL("../../../", import.meta.url));
@@ -109,8 +112,18 @@ it("forwards build arguments and preserves real type errors and exit status", as
     "--pretty",
     "false",
   ]);
+  const direct = execute(resolveTypeScriptCompiler().launcher, [
+    "-p",
+    root,
+    "--noEmit",
+    "--pretty",
+    "false",
+  ]);
+  expect(direct.error).toBeUndefined();
+  expect(direct.status, direct.stdout + direct.stderr).toBeGreaterThan(0);
+  expect(direct.stdout + direct.stderr).toContain("TS2322");
   expect(invalid.error).toBeUndefined();
-  expect(invalid.status, invalid.stdout + invalid.stderr).toBe(2);
+  expect(invalid.status, invalid.stdout + invalid.stderr).toBe(direct.status);
   expect(invalid.stdout + invalid.stderr).toContain("TS2322");
   expect(await readFile(join(root, "output/input.js"), "utf8")).toContain(
     "value = 1",
