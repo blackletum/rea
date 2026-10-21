@@ -46,6 +46,16 @@ without executing tests or building. A missing Git base reports how to fetch
 it or select another revision.
 
 Source typechecking needs no compiled runtime or generated test metadata.
+Typecheck, runtime compilation, and Frida binding verification share
+`scripts/run-typescript.mjs`. The pinned tsrs package supplies Linux x64/arm64
+(GNU and musl) and macOS arm64 compilers. Windows and other unsupported hosts
+retain the official TypeScript compiler. A missing binary on a supported host
+fails with the package's installation diagnostic; it does not silently fall back.
+The Rust compiler defaults to at most two checker threads and a 3 GiB soft memory
+target; explicit compiler arguments can override those defaults. Neither setting
+is a process-family memory limit. Termux's explicit build and Stryker's compiler
+API dependency retain their existing TypeScript versions.
+
 `npm run build:cached` compiles the CLI/MCP runtime and its packaged skill.
 Turbo's strict task environment preserves caller-selected `GOMAXPROCS`,
 `GOMEMLIMIT`, and `UV_THREADPOOL_SIZE` for resource-constrained builds and

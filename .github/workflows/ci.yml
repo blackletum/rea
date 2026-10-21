@@ -849,6 +849,7 @@ jobs:
           npx vitest run --coverage.enabled=false
           src/process/capture/FilesystemSnapshot.test.ts
           tests/process-global/filesystemSnapshotFallbackCancellation.test.ts
+          tests/boundary/filesystem/typescriptCompiler.test.ts
           tests/boundary/filesystem/binaryTarget.test.ts
           tests/boundary/filesystem/safeOutputTree.test.ts
           tests/boundary/providers/native/artifactProvider.archiveSafety.test.ts

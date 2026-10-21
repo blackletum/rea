@@ -10,6 +10,7 @@
       "inputs": [
         "package.json",
         "package-lock.json",
+        "scripts/run-typescript.mjs",
         "scripts/check-dependency-install.mjs",
         "scripts/clean-build-output.mjs",
         "scripts/bundle-runtime.mjs",
@@ -28,6 +29,7 @@
       "inputs": [
         "package.json",
         "package-lock.json",
+        "scripts/run-typescript.mjs",
         "src/**/*.{cts,mts,ts,tsx}",
         "src/**/package.json",
         "tests/**/*.{cts,mts,ts,tsx}",

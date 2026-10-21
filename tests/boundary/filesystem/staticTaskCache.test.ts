@@ -350,6 +350,13 @@ it.each([
     invalidatesCompile: false,
   },
   {
+    label: "compiler launcher",
+    path: "scripts/run-typescript.mjs",
+    content: 'throw new Error("compiler launcher changed");\n',
+    diagnostic: "compiler launcher changed",
+    invalidatesCompile: true,
+  },
+  {
     label: "source declaration",
     path: "src/types.d.mts",
     content: "export type SourceValue = 2;\n",
@@ -410,10 +417,14 @@ it.each([
       ["compile", "typecheck"],
       {
         // Exercise the real compiler phase with the production task inputs.
-        compile: "tsc -p tsconfig.build.json",
-        typecheck: "tsc --noEmit",
+        compile: "node scripts/run-typescript.mjs -p tsconfig.build.json",
+        typecheck: "node scripts/run-typescript.mjs --noEmit",
       },
       { "#compiler-scope": "./scripts/root-types.d.mts" },
+    );
+    await writeFile(
+      join(root, "scripts/run-typescript.mjs"),
+      await readFile(join(repository, "scripts/run-typescript.mjs")),
     );
     for (const name of [
       "tsconfig.json",
