@@ -52,6 +52,9 @@ Kernel representations have different meanings:
 - PTX reports parameter declarations and virtual registers. Shared bytes cover
   supported static declarations inside that entry; they do not establish module
   shared memory, dynamic allocation or physical device resources.
+  Scalar register declarations count each bare or percent-prefixed name and
+  each parameterized range. Unsupported declaration forms or overflowing totals
+  retain an unknown count and partial decoding coverage.
 - CUBIN identifies CUDA entry symbols and reads numeric `nv.info` records and
   native section declarations. Global register declarations also cover compiler
   versions that leave the older text-section register field empty.
@@ -114,3 +117,17 @@ from those notes before target selection; selected kernel analysis reuses the
 same parsed declarations. Pages have a
 1 MiB response budget. Resource refusals and interrupted observations preserve
 known facts and explicit uncertainty.
+
+CUDA ELF parsing additionally shares a 262,144 record/symbol visit limit,
+128 MiB of cumulative metadata section reads, and a 16 MiB serialized-size
+accounting budget for temporary index facts. These limits are checked before
+index growth; they are not claims about JavaScript heap size. Equivalent scoped
+metadata byte ranges and repeated equal register declarations are coalesced;
+conflicting values remain unknown. Parameter sections are parsed once per ELF.
+
+Missing CUBIN symbol tables or unresolved section names produce `partial`
+object, report and target coverage even when some kernel facts survive. AMD note
+failures preserve earlier successfully parsed declarations and the original
+failure reason. Standalone PTX recognition tries a small header first, then
+continues within the existing 16 MiB text budget when leading comments or
+whitespace obscure its directives; admitted full-file probe bytes are reused.

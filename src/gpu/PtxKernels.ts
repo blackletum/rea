@@ -79,16 +79,17 @@ const sizeOf = (type: string | undefined): number | null => {
 const registerDeclaration = (
   values: string[],
 ): { type: string; count: number | null } => {
-  const firstName = values.findIndex((value) => !value.startsWith("."));
-  if (firstName <= 0) return { type: values.join(" "), count: null };
+  const identifier = /^%?[A-Za-z_$][\w$@.]*$/u;
+  const firstName = values.findIndex((value) => identifier.test(value));
+  if (firstName <= 0)
+    return rejectGpu("PTX register declaration has no type or name");
   const type = values.slice(0, firstName).join(" ");
   if (firstName !== 1 || !/^\.(?:pred|[busf](?:8|16|32|64|128))$/u.test(type))
     return { type, count: null };
   let at = firstName,
     count = 0;
   while (at < values.length) {
-    if (!/^%?[A-Za-z_$][\w$@.]*$/u.test(values[at++]!))
-      return { type, count: null };
+    if (!identifier.test(values[at++]!)) return { type, count: null };
     let declared = 1;
     if (values[at] === "<") {
       const range = integer(values[at + 1]);

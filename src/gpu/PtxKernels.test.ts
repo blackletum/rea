@@ -75,6 +75,7 @@ it.each([
   ".entry broken(",
   ".entry k() {",
   ".entry k() {.reg .u32 %x}",
+  ".entry k() {.reg %x;}",
 ])("rejects incomplete PTX %s", (text) => {
   expect(() => [...readPtxKernels(text, "object")]).toThrow();
 });
