@@ -86,3 +86,31 @@ descendants every 20 ms and is approximate; the observer is excluded.
 Retention caches are scoped to immutable Evidence through a WeakMap; historical
 pages do not reopen files. Live inspections always stream a fresh full-file hash
 and revalidate the descriptor/path. No live-state freshness cache is claimed.
+
+## Review follow-up
+
+At `36b87ed`, the public CLI reproduced both review findings: selecting
+`amdgcn-amd-amdhsa--gfx900` in the real Clang-produced standalone object returned
+zero kernels with an unknown target, and malformed `--targets` JSON was reported
+at the `view` issue path.
+
+At `09c6062`, AMD ELF note parsing owns target discovery and prepared kernel
+declarations. Inventory reads those bounded notes before selection; selected
+analysis reuses them without decoding MessagePack twice. Aggregate encoded note
+bytes are limited to 8 MiB before reads, with existing per-value/depth limits;
+the parsed JavaScript representation expands beyond that source-byte count.
+The prepared declarations live only for the current payload inspection. Named
+CLI option parsing also supplies the actual parsed input to schema diagnostics.
+
+The real public CLI now inventories the gfx900 target, returns the producer's
+one kernel/two parameters/12-byte parameter area/6 SGPR/2 VGPR when selected,
+and preserves an unselected object without kernel facts for a different target.
+Those three complete CLI tasks together took 5.974 seconds / 6.951 CPU seconds /
+383,623,168 sampled peak family RSS bytes, including the Python task driver.
+All nine producer artifacts were reread with complete payload coverage.
+
+The review regression run passed 35 cases in four files, including public CLI,
+MCP, metadata capacity and cleanup. A further 10 product-catalog cases passed
+after adding the missing CLI `analysis` option description identified by CI.
+The earlier paired nvJPEG measurements remain pinned to their original runtime;
+these follow-ups do not establish a new CUDA performance result.

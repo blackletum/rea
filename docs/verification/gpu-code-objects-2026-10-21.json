@@ -431,5 +431,167 @@
     "Tokenx estimates, not model billing. Full SDK replies include text and structured representations; initialization and JSON-RPC envelopes omitted.",
     "Earlier all-target complete MCP response exceeded the existing transport guard and did not complete. It is not a baseline. Both completed comparisons select sm_100.",
     "A prior combined focused run timed out two schema cases at 30 seconds on two CPUs; the isolated schema suite passed 15/15 without changing timeouts."
-  ]
+  ],
+  "review_followup": {
+    "source_revision": "09c6062cbd70692e6eb4c7cf53b7a10ba886aeb6",
+    "source_tree": "8f1db7308f83065ce8415f7ffc5d298b4879ec22",
+    "before": {
+      "source_revision": "36b87ed45912d0d53191ae3611b258f140019ab9",
+      "real_gfx900_matching_selection": {
+        "exit_code": 0,
+        "target": null,
+        "kernel_count": 0
+      },
+      "malformed_targets_cli_issue_path": ["view"]
+    },
+    "after": {
+      "real_cli": {
+        "calls": [
+          {
+            "kind": "inventory",
+            "command": [
+              "node",
+              "scripts/rea.mjs",
+              "inspect-gpu-code-objects",
+              "/home/yann/yann/rea-5345-lab/fixtures/add-gfx900.hsaco",
+              "--detail",
+              "complete",
+              "--json"
+            ],
+            "exit_code": 0,
+            "sha256": "0b1c25b301a7ded9fcac09968f5e140940db16df395867496845623e3c38a672",
+            "target": "amdgcn-amd-amdhsa--gfx900",
+            "kernel_count": 0
+          },
+          {
+            "kind": "selected",
+            "command": [
+              "node",
+              "scripts/rea.mjs",
+              "inspect-gpu-code-objects",
+              "/home/yann/yann/rea-5345-lab/fixtures/add-gfx900.hsaco",
+              "--detail",
+              "complete",
+              "--json",
+              "--analysis",
+              "kernels",
+              "--targets",
+              "[\"amdgcn-amd-amdhsa--gfx900\"]"
+            ],
+            "exit_code": 0,
+            "sha256": "0b1c25b301a7ded9fcac09968f5e140940db16df395867496845623e3c38a672",
+            "target": "amdgcn-amd-amdhsa--gfx900",
+            "kernel_count": 1
+          },
+          {
+            "kind": "unselected",
+            "command": [
+              "node",
+              "scripts/rea.mjs",
+              "inspect-gpu-code-objects",
+              "/home/yann/yann/rea-5345-lab/fixtures/add-gfx900.hsaco",
+              "--detail",
+              "complete",
+              "--json",
+              "--analysis",
+              "kernels",
+              "--targets",
+              "[\"amdgcn-amd-amdhsa--gfx1100\"]"
+            ],
+            "exit_code": 0,
+            "sha256": "0b1c25b301a7ded9fcac09968f5e140940db16df395867496845623e3c38a672",
+            "target": "amdgcn-amd-amdhsa--gfx900",
+            "kernel_count": 0
+          }
+        ],
+        "oracle": "Clang 14 producer source and independent llvm-readelf metadata output; no GPU execution"
+      },
+      "resource_receipt": {
+        "command": [
+          "taskset",
+          "-c",
+          "0,1",
+          "python3",
+          "/home/yann/yann/rea-5345-lab/review-amd-cli.py"
+        ],
+        "exit_code": 0,
+        "wall_s": 5.9736752989992965,
+        "cpu_s": 6.950947,
+        "cpu_accounting": "payload family wait rusage delta; inherited shell child usage excluded",
+        "peak_family_rss_bytes": 383623168,
+        "sample_ms": 20,
+        "guard_stop": null
+      },
+      "focused_resource_receipt": {
+        "command": [
+          "taskset",
+          "-c",
+          "0,1",
+          "npm",
+          "run",
+          "test:focused",
+          "--",
+          "tests/acceptance/gpuCodeObjectsCli.test.ts",
+          "tests/boundary/gpu/codeObjects.test.ts",
+          "tests/process-global/gpuFileLifetime.test.ts",
+          "src/gpu/AmdGpuMetadata.test.ts"
+        ],
+        "exit_code": 0,
+        "wall_s": 83.7720508450002,
+        "cpu_s": 138.813059,
+        "cpu_accounting": "payload family wait rusage delta; inherited shell child usage excluded",
+        "peak_family_rss_bytes": 3452530688,
+        "sample_ms": 20,
+        "guard_stop": null
+      },
+      "focused_tests": {
+        "files": 4,
+        "passed": 35
+      },
+      "catalog_resource_receipt": {
+        "command": [
+          "taskset",
+          "-c",
+          "0,1",
+          "npm",
+          "run",
+          "test:focused",
+          "--",
+          "tests/boundary/filesystem/productCatalog.test.ts"
+        ],
+        "exit_code": 0,
+        "wall_s": 74.92947246800031,
+        "cpu_s": 126.30404600000001,
+        "cpu_accounting": "payload family wait rusage delta; inherited shell child usage excluded",
+        "peak_family_rss_bytes": 3469959168,
+        "sample_ms": 20,
+        "guard_stop": null
+      },
+      "catalog_tests": {
+        "files": 1,
+        "passed": 10
+      },
+      "nine_real_producer_artifacts": "complete payload coverage; rerun after review fixes",
+      "producer_resource_receipt": {
+        "command": [
+          "taskset",
+          "-c",
+          "0,1",
+          "node",
+          "--import",
+          "tsx",
+          "/home/yann/yann/rea-5345-lab/probe.mts"
+        ],
+        "exit_code": 0,
+        "wall_s": 0.5241675279976334,
+        "cpu_s": 0.6436419999999999,
+        "cpu_accounting": "payload family wait rusage delta; inherited shell child usage excluded",
+        "peak_family_rss_bytes": 124952576,
+        "sample_ms": 20,
+        "guard_stop": null
+      }
+    },
+    "ownership": "Bounded AMD ELF note parser produces target plus parsed kernel declarations once; inventory discovers target before filtering and selected projection reuses prepared notes. The 8 MiB budget applies to aggregate encoded source-note bytes, before their reads; parsed JS representation expands. Prepared notes live only for one payload inspection. CLI parses each named JSON option and preserves the full parsed input for schema diagnostics.",
+    "performance_scope": "The paired nvJPEG MCP measurements above remain pinned to their original qualified runtime; this follow-up does not claim a new CUDA speed/memory result."
+  }
 }
