@@ -51,9 +51,10 @@ Typecheck, runtime compilation, and Frida binding verification share
 (GNU and musl) and macOS arm64 compilers. Windows and other unsupported hosts
 retain the official TypeScript compiler. A missing binary on a supported host
 fails with the package's installation diagnostic; it does not silently fall back.
-The Rust compiler defaults to at most two checker threads and a 3 GiB soft memory
-target; explicit compiler arguments can override those defaults. Neither setting
-is a process-family memory limit. Termux's explicit build and Stryker's compiler
+The Rust compiler defaults to at most two checker threads. For `--noEmit`
+checks, `--maxMemory 3G` also sets a soft memory target; emit builds do not use
+that target. Explicit compiler arguments can override the defaults. These
+controls do not impose a process-family memory limit. Termux's explicit build and Stryker's compiler
 API dependency retain their existing TypeScript versions.
 
 `npm run build:cached` compiles the CLI/MCP runtime and its packaged skill.
