@@ -14,9 +14,19 @@ const repository = fileURLToPath(new URL("../../../", import.meta.url));
 const launcher = join(repository, "scripts/run-typescript.mjs");
 const require = createRequire(import.meta.url);
 const rustPackage = z
-  .object({ optionalDependencies: z.record(z.string(), z.string()) })
+  .object({
+    version: z.string(),
+    optionalDependencies: z.record(z.string(), z.string()),
+  })
   .parse(
     JSON.parse(await readFile(require.resolve("tsrs/package.json"), "utf8")),
+  );
+const officialPackage = z
+  .object({ version: z.string() })
+  .parse(
+    JSON.parse(
+      await readFile(require.resolve("typescript/package.json"), "utf8"),
+    ),
   );
 const execute = (script: string, args: string[]) =>
   spawnSync(process.execPath, [script, ...args], {
@@ -52,7 +62,7 @@ it("always retains the official compiler on Windows", () => {
   ).toBe("typescript");
 });
 
-it("runs the selected installed compiler", () => {
+it("runs the selected installed compiler at the shared TypeScript version", () => {
   const result = execute(launcher, ["--version"]);
   expect(result.error).toBeUndefined();
   expect(result.status, result.stderr).toBe(0);
@@ -61,9 +71,9 @@ it("runs the selected installed compiler", () => {
     process.arch,
     rustPackage.optionalDependencies,
   );
-  expect(result.stdout).toContain(
-    compiler === "tsrs" ? "tsrs 0.18.0" : "Version 7.0.2",
-  );
+  expect(result.stdout).toContain(`Version ${officialPackage.version}`);
+  if (compiler === "tsrs")
+    expect(result.stdout).toContain(`tsrs ${rustPackage.version}`);
 });
 
 it("forwards build arguments and preserves real type errors and exit status", async () => {
