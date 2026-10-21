@@ -135,6 +135,7 @@ export const SCOPES = {
     "src/application/DshCordis*.ts",
     "src/cli/interactiveSetup.ts",
     "src/cli/setupCommands.ts",
+    "tests/boundary/filesystem/typescriptCompiler.test.ts",
     "tests/boundary/filesystem/binaryTarget.test.ts",
     "tests/boundary/filesystem/safeOutputTree.test.ts",
     "tests/boundary/providers/native/artifactProvider.archiveSafety.test.ts",
