@@ -3,6 +3,7 @@ import type { GpuKernel, GpuLocation } from "../domain/gpu/gpuCodeObjects.js";
 import {
   BinaryReader,
   BinaryFormatFailure,
+  BinaryResourceFailure,
 } from "../native/metadata/BinaryContainer.js";
 import {
   readElfSectionDirectory,
@@ -17,6 +18,7 @@ import {
   type GpuSource,
 } from "./GpuSource.js";
 import {
+  AMD_METADATA_BYTES,
   amdCount,
   amdRecord,
   amdString,
@@ -73,7 +75,10 @@ export const readGpuElfKernels = async (
   source: GpuSource,
   kind: "cubin" | "amdgpu",
   onKernel: (kernel: GpuKernel) => void,
+  preparedAmd?: AmdElfMetadata,
 ): Promise<{ target: string | null; limitations: string[] }> => {
+  if (kind === "amdgpu" && preparedAmd !== undefined)
+    return amdKernels(source, preparedAmd, onKernel);
   const directory = await readGpuNativeDirectory(
     source,
     readElfSectionDirectory(source.size),
@@ -91,7 +96,11 @@ export const readGpuElfKernels = async (
         : [],
     };
   }
-  return amdKernels(source, directory, onKernel);
+  return amdKernels(
+    source,
+    await readAmdElfMetadata(source, directory),
+    onKernel,
+  );
 };
 const indexCudaMetadata = async (
   source: GpuSource,
@@ -262,16 +271,38 @@ const cudaKernels = async (
     }
   }
 };
-const amdKernels = async (
+export interface AmdElfMetadata {
+  readonly target: string | null;
+  readonly limitations: string[];
+  readonly notes: {
+    section: NativeSection;
+    noteOffset: number;
+    desc: number;
+    size: number;
+    kernels: unknown[];
+  }[];
+}
+/** One bounded parsed owner for target discovery and later selected kernel projection. */
+export const readAmdElfMetadata = async (
   source: GpuSource,
   directory: NativeSectionDirectory,
-  onKernel: (kernel: GpuKernel) => void,
-): Promise<{ target: string | null; limitations: string[] }> => {
+): Promise<AmdElfMetadata> => {
+  if (directory.machine !== 224)
+    rejectGpu("AMDGPU metadata requires an AMDGPU ELF machine");
   const targets = new Set<string>(),
     limitations: string[] = [];
-  let foundMetadata = false;
+  const notes: AmdElfMetadata["notes"] = [];
+  let retainedBytes = 0;
   for (const section of directory.sections) {
     if (section.type !== 7) continue;
+    const sectionSize = gpuCount(section.size);
+    if (sectionSize > AMD_METADATA_BYTES - retainedBytes)
+      throw new BinaryResourceFailure(
+        "structure",
+        AMD_METADATA_BYTES,
+        "AMDGPU ELF note discovery exceeds the 8 MiB retained metadata budget",
+      );
+    retainedBytes += sectionSize;
     const bytes = await sectionBytes(source, section),
       r = new BinaryReader(bytes, directory.little);
     for (let p = 0; p < bytes.length;) {
@@ -291,64 +322,15 @@ const amdKernels = async (
         .toString("latin1")
         .replace(/\0$/u, "");
       if (vendor === "AMDGPU" && type === 32) {
-        foundMetadata = true;
         const metadata = amdRecord(
           readAmdMetadata(bytes.subarray(desc, desc + size)),
         );
-        if (metadata === null || !Array.isArray(metadata["amdhsa.kernels"]))
-          rejectGpu("AMDGPU metadata has no valid kernel array");
+        const kernels = metadata?.["amdhsa.kernels"];
+        if (!Array.isArray(kernels))
+          return rejectGpu("AMDGPU metadata has no valid kernel array");
         const target = amdString(metadata!["amdhsa.target"]);
         if (target !== null) targets.add(target);
-        const rows = metadata!["amdhsa.kernels"] as unknown[];
-        for (let index = 0; index < rows.length; index++) {
-          const value = amdRecord(rows[index]);
-          const name = value === null ? null : amdString(value[".name"]);
-          if (value === null || name === null)
-            rejectGpu("AMDGPU kernel metadata has no name");
-          const kernel = blankKernel(
-            source,
-            `note:${section.index}:${p}:${index}`,
-            name!,
-            site(source, section, desc, size),
-          );
-          kernel.representation = "amdgpu-metadata";
-          kernel.sources = {
-            parameters: kernel.location,
-            registers: kernel.location,
-            shared: kernel.location,
-            private: kernel.location,
-          };
-          kernel.symbol = amdString(value![".symbol"]);
-          kernel.parameter_bytes = amdCount(value![".kernarg_segment_size"]);
-          kernel.shared_bytes = amdCount(value![".group_segment_fixed_size"]);
-          kernel.private_bytes = amdCount(
-            value![".private_segment_fixed_size"],
-          );
-          kernel.registers.sgpr = amdCount(value![".sgpr_count"]);
-          kernel.registers.vgpr = amdCount(value![".vgpr_count"]);
-          kernel.registers.agpr = amdCount(value![".agpr_count"]);
-          const args = value![".args"];
-          if (Array.isArray(args)) {
-            kernel.parameter_count = args.length;
-            kernel.parameters = args.map((argument, ordinal) => {
-              const row = amdRecord(argument);
-              if (row === null) rejectGpu("Malformed AMDGPU argument metadata");
-              const kind = amdString(row![".value_kind"]);
-              return {
-                ordinal,
-                name: amdString(row![".name"]),
-                offset: amdCount(row![".offset"]),
-                size: amdCount(row![".size"]),
-                type: amdString(row![".type_name"]),
-                hidden: kind === null ? null : kind.startsWith("hidden_"),
-              };
-            });
-          }
-          kernel.limitations.push(
-            "AMDGPU parameter count includes hidden ABI arguments when present; missing fields remain unknown. Kernel metadata is a declaration, not runtime verification.",
-          );
-          onKernel(kernel);
-        }
+        notes.push({ section, noteOffset: p, desc, size, kernels });
       } else if (vendor === "AMD" && (type === 10 || type === 11))
         limitations.push(
           "Legacy AMDGPU YAML metadata is outside MessagePack coverage",
@@ -356,10 +338,77 @@ const amdKernels = async (
       p = end;
     }
   }
-  if (!foundMetadata)
+  if (notes.length === 0)
     throw new BinaryFormatFailure(
       "unsupported",
       "No AMDGPU v3+ MessagePack kernel metadata was available",
     );
-  return { target: targets.size === 1 ? [...targets][0]! : null, limitations };
+  return {
+    target: targets.size === 1 ? [...targets][0]! : null,
+    limitations,
+    notes,
+  };
+};
+
+const amdKernels = (
+  source: GpuSource,
+  prepared: AmdElfMetadata,
+  onKernel: (kernel: GpuKernel) => void,
+): { target: string | null; limitations: string[] } => {
+  for (const {
+    section,
+    noteOffset,
+    desc,
+    size,
+    kernels: rows,
+  } of prepared.notes) {
+    for (let index = 0; index < rows.length; index++) {
+      const value = amdRecord(rows[index]);
+      const name = value === null ? null : amdString(value[".name"]);
+      if (value === null || name === null)
+        rejectGpu("AMDGPU kernel metadata has no name");
+      const kernel = blankKernel(
+        source,
+        `note:${section.index}:${noteOffset}:${index}`,
+        name!,
+        site(source, section, desc, size),
+      );
+      kernel.representation = "amdgpu-metadata";
+      kernel.sources = {
+        parameters: kernel.location,
+        registers: kernel.location,
+        shared: kernel.location,
+        private: kernel.location,
+      };
+      kernel.symbol = amdString(value![".symbol"]);
+      kernel.parameter_bytes = amdCount(value![".kernarg_segment_size"]);
+      kernel.shared_bytes = amdCount(value![".group_segment_fixed_size"]);
+      kernel.private_bytes = amdCount(value![".private_segment_fixed_size"]);
+      kernel.registers.sgpr = amdCount(value![".sgpr_count"]);
+      kernel.registers.vgpr = amdCount(value![".vgpr_count"]);
+      kernel.registers.agpr = amdCount(value![".agpr_count"]);
+      const args = value![".args"];
+      if (Array.isArray(args)) {
+        kernel.parameter_count = args.length;
+        kernel.parameters = args.map((argument, ordinal) => {
+          const row = amdRecord(argument);
+          if (row === null) rejectGpu("Malformed AMDGPU argument metadata");
+          const kind = amdString(row![".value_kind"]);
+          return {
+            ordinal,
+            name: amdString(row![".name"]),
+            offset: amdCount(row![".offset"]),
+            size: amdCount(row![".size"]),
+            type: amdString(row![".type_name"]),
+            hidden: kind === null ? null : kind.startsWith("hidden_"),
+          };
+        });
+      }
+      kernel.limitations.push(
+        "AMDGPU parameter count includes hidden ABI arguments when present; missing fields remain unknown. Kernel metadata is a declaration, not runtime verification.",
+      );
+      onKernel(kernel);
+    }
+  }
+  return { target: prepared.target, limitations: prepared.limitations };
 };

@@ -108,6 +108,9 @@ before decoding, and CCOB's truncated MD5 is verified against decoded bytes.
 Resource limits are one active inspection, 128 MiB per decoded object, 512 MiB
 of decoded work per inspection, and 16 MiB retained facts including selected PTX.
 Native tables and decoded section names each have a 16 MiB structural budget;
-AMDGPU notes have bounded depth and container/string allocations. Pages have a
+AMDGPU ELF note discovery admits at most 8 MiB of source note bytes, with
+bounded depth and container/string allocations. Standalone AMD targets are read
+from those notes before target selection; selected kernel analysis reuses the
+same parsed declarations. Pages have a
 1 MiB response budget. Resource refusals and interrupted observations preserve
 known facts and explicit uncertainty.

@@ -5,6 +5,8 @@ import {
 } from "../native/metadata/BinaryContainer.js";
 import { rejectGpu } from "./GpuSource.js";
 
+export const AMD_METADATA_BYTES = 8 * 1024 * 1024;
+
 /** Validate allocation and nesting costs before the standard decoder allocates containers. */
 const utf8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 const preflight = (bytes: Buffer): Set<string> => {
@@ -107,10 +109,10 @@ const preflight = (bytes: Buffer): Set<string> => {
   return strings;
 };
 export const readAmdMetadata = (bytes: Buffer): unknown => {
-  if (bytes.length > 8 * 1024 * 1024)
+  if (bytes.length > AMD_METADATA_BYTES)
     throw new BinaryResourceFailure(
       "structure",
-      8 * 1024 * 1024,
+      AMD_METADATA_BYTES,
       "AMDGPU metadata exceeds 8 MiB",
     );
   const strings = preflight(bytes);

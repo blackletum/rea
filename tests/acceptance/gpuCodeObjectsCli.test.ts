@@ -17,6 +17,7 @@ import {
   cudaFixture,
   ccobFixture,
   ptxFixture,
+  amdFixture,
 } from "../fixtures/gpu/codeObjects.js";
 
 cliTest(
@@ -26,6 +27,7 @@ cliTest(
     for (const [name, bytes] of [
       ["cuda", cudaFixture("zstd")],
       ["hip", ccobFixture()],
+      ["amd", amdFixture()],
     ] as const) {
       const path = join(root, name);
       await writeFile(path, bytes);
@@ -37,6 +39,9 @@ cliTest(
           "kernels",
           "--detail",
           "complete",
+          ...(name === "amd"
+            ? ["--targets", '["amdgcn-amd-amdhsa--gfx900"]']
+            : []),
           "--json",
         ],
       });
@@ -53,6 +58,37 @@ cliTest(
       expect(report.kernels).toHaveLength(name === "cuda" ? 2 : 1);
       expect(report.kernels[0]!.parameter_bytes).toBe(12);
       expect(report.coverage.payloads).toBe("complete");
+    }
+  },
+);
+
+cliTest(
+  "attributes malformed selector JSON to its actual CLI option",
+  async ({ cli }) => {
+    for (const name of ["object_ids", "targets", "view"]) {
+      const response = await cli.run({
+        arguments: [
+          "inspect-gpu-code-objects",
+          "/not-opened-for-invalid-selectors",
+          `--${name}`,
+          "[",
+          "--json",
+        ],
+      });
+      expect(response.exitCode).not.toBe(0);
+      expect(response.json).toMatchObject({
+        code: "invalid_request",
+        details: {
+          operation: "inspect_gpu_code_objects",
+          issues: [
+            {
+              path: [name],
+              reason: "invalid_format",
+              message: `${name} must be valid JSON`,
+            },
+          ],
+        },
+      });
     }
   },
 );

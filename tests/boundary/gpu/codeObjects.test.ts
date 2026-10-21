@@ -13,6 +13,7 @@ import {
   peGpuFixture,
   elfFixture,
   ptxFixture,
+  amdFixture,
 } from "../../fixtures/gpu/codeObjects.js";
 const inspect = async (
   bytes: Buffer,
@@ -96,6 +97,58 @@ it("does not decode unselected payloads and keeps stable positional identities",
   expect(selected.value.ptx_artifacts).toEqual([]);
   expect(selected.value.kernels).toHaveLength(1);
   expect(selected.value.coverage.payloads).toBe("partial");
+});
+it("discovers standalone AMD targets before exact selection", async () => {
+  const bytes = amdFixture(),
+    target = "amdgcn-amd-amdhsa--gfx900";
+  const inventory = await inspect(bytes, { analysis: "inventory" });
+  const selected = await inspect(bytes, { targets: [target] });
+  const skipped = await inspect(bytes, {
+    targets: ["amdgcn-amd-amdhsa--gfx1100"],
+  });
+  if (!inventory.ok) throw inventory.error;
+  if (!selected.ok) throw selected.error;
+  if (!skipped.ok) throw skipped.error;
+  expect(inventory.value.objects[0]).toMatchObject({
+    target,
+    inspection: "inventory",
+    sha256: null,
+  });
+  expect(inventory.value.kernels).toEqual([]);
+  expect(selected.value.objects[0]).toMatchObject({
+    target,
+    inspection: "complete",
+    id: inventory.value.objects[0]!.id,
+  });
+  expect(selected.value.kernels).toHaveLength(1);
+  expect(selected.value.kernels[0]).toMatchObject({
+    representation: "amdgpu-metadata",
+    parameter_bytes: 12,
+  });
+  expect(skipped.value.objects[0]).toMatchObject({
+    target,
+    inspection: "not-selected",
+    sha256: null,
+  });
+  expect(skipped.value.kernels).toEqual([]);
+  expect(skipped.value.coverage.payloads).toBe("partial");
+});
+it("bounds standalone AMD note discovery before retaining metadata", async () => {
+  const result = await inspect(
+    elfFixture(224, [
+      { name: ".note", type: 7, bytes: Buffer.alloc(8 * 1024 * 1024 + 1) },
+    ]),
+    { analysis: "inventory" },
+  );
+  if (!result.ok) throw result.error;
+  expect(result.value.objects[0]).toMatchObject({
+    target: null,
+    inspection: "capacity",
+  });
+  expect(result.value.objects[0]!.limitations).toContain(
+    "AMDGPU ELF note discovery exceeds the 8 MiB retained metadata budget",
+  );
+  expect(result.value.kernels).toEqual([]);
 });
 it("reads PE raw-size fallback and ELF-host section locations", async () => {
   for (const bytes of [

@@ -37,7 +37,11 @@ import {
   rejectGpu,
   type GpuSource,
 } from "./GpuSource.js";
-import { readGpuElfKernels } from "./GpuElfKernels.js";
+import {
+  readGpuElfKernels,
+  readAmdElfMetadata,
+  type AmdElfMetadata,
+} from "./GpuElfKernels.js";
 import { readPtxKernels, readPtxTarget } from "./PtxKernels.js";
 
 /** File declarations only. Every child range stays in its named parent coordinate space. */
@@ -153,7 +157,18 @@ export class GpuInventory {
         if (directory.machine === 190)
           row.target = `sm_${directory.flags & 0xff}`;
         this.#add(row);
-        await this.#payload(source, row);
+        let preparedAmd: AmdElfMetadata | undefined;
+        if (directory.machine === 224) {
+          try {
+            preparedAmd = await readAmdElfMetadata(source, directory);
+            this.#retain({ target: preparedAmd.target });
+            row.target = preparedAmd.target;
+          } catch (cause) {
+            this.#retainFailure(row, cause);
+            return directory.format;
+          }
+        }
+        await this.#payload(source, row, preparedAmd);
       } else {
         for (const section of directory.sections) {
           this.examined_sections++;
@@ -244,7 +259,11 @@ export class GpuInventory {
           : "malformed";
     this.#objectLimitations(row, [cause.message]);
   }
-  async #payload(source: GpuSource, row: GpuObject): Promise<void> {
+  async #payload(
+    source: GpuSource,
+    row: GpuObject,
+    preparedAmd?: AmdElfMetadata,
+  ): Promise<void> {
     if (this.input.analysis !== "kernels") return;
     if (!this.#selected(row)) {
       row.inspection = "not-selected";
@@ -324,10 +343,15 @@ export class GpuInventory {
           this.kernels.push(kernel);
         }
       } else if (row.kind === "cubin" || row.kind === "amdgpu") {
-        const parsed = await readGpuElfKernels(decoded, row.kind, (kernel) => {
-          this.#retain(kernel);
-          this.kernels.push(kernel);
-        });
+        const parsed = await readGpuElfKernels(
+          decoded,
+          row.kind,
+          (kernel) => {
+            this.#retain(kernel);
+            this.kernels.push(kernel);
+          },
+          preparedAmd,
+        );
         if (row.target === null) {
           this.#retain({ target: parsed.target });
           row.target = parsed.target;

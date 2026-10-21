@@ -33,7 +33,10 @@ export const registerGpuCommands = (cli: CliInstance, logger: Logger): void => {
         .describe(
           "JSON GPU object/kernel/PTX page selection; requires --detail summary and --evidence_output",
         ),
-      analysis: z.enum(["inventory", "kernels"]).default("inventory"),
+      analysis: z
+        .enum(["inventory", "kernels"])
+        .default("inventory")
+        .describe("Inventory GPU targets or decode selected kernel metadata"),
       expected_sha256: z
         .string()
         .optional()
@@ -50,49 +53,42 @@ export const registerGpuCommands = (cli: CliInstance, logger: Logger): void => {
     run: ({ args, options }) =>
       withCommandCancellation((signal) =>
         logCliCommand(logger, CLI_COMMANDS.inspectGpuCodeObjects, async () => {
-          let view: unknown;
-          let object_ids: unknown;
-          let targets: unknown;
-          try {
-            object_ids =
-              options.object_ids === undefined
-                ? undefined
-                : JSON.parse(options.object_ids);
-            targets =
-              options.targets === undefined
-                ? undefined
-                : JSON.parse(options.targets);
-            view =
-              options.view === undefined ? undefined : JSON.parse(options.view);
-          } catch (cause) {
-            return projectAnalysisError(
-              new AnalysisInputError("inspect_gpu_code_objects", { cause }, [
-                {
-                  path: ["view"],
-                  reason: "invalid_format",
-                  message:
-                    "view must be a JSON GPU object/kernel/PTX page selection",
-                },
-              ]),
-            );
+          const selectors: Partial<
+            Record<"object_ids" | "targets" | "view", unknown>
+          > = {};
+          for (const name of ["object_ids", "targets", "view"] as const) {
+            const value = options[name];
+            if (value === undefined) continue;
+            try {
+              selectors[name] = JSON.parse(value);
+            } catch (cause) {
+              return projectAnalysisError(
+                new AnalysisInputError("inspect_gpu_code_objects", { cause }, [
+                  {
+                    path: [name],
+                    reason: "invalid_format",
+                    message: `${name} must be valid JSON`,
+                  },
+                ]),
+              );
+            }
           }
-          const selected = inspectGpuCodeObjectsInputSchema.safeParse({
+          const rawInput = {
             path: absoluteCallerPath(args.path),
             analysis: options.analysis,
             ...(options.expected_sha256 === undefined
               ? {}
               : { expected_sha256: options.expected_sha256 }),
-            ...(object_ids === undefined ? {} : { object_ids }),
-            ...(targets === undefined ? {} : { targets }),
+            ...selectors,
             detail: options.detail,
-            ...(view === undefined ? {} : { view }),
-          });
+          };
+          const selected = inspectGpuCodeObjectsInputSchema.safeParse(rawInput);
           if (!selected.success)
             return projectAnalysisError(
               analysisInputErrorFromIssues(
                 "inspect_gpu_code_objects",
                 selected.error.issues,
-                { view },
+                rawInput,
               ),
             );
           const service = createGpuCodeObjectsService();
