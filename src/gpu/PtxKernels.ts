@@ -1,3 +1,4 @@
+import { BinaryFormatFailure } from "../native/metadata/BinaryContainer.js";
 import type { GpuKernel } from "../domain/gpu/gpuCodeObjects.js";
 import { BinaryResourceFailure } from "../native/metadata/BinaryContainer.js";
 import { GPU_REPORT_BYTES, rejectGpu } from "./GpuSource.js";
@@ -316,25 +317,30 @@ export const readPtxTarget = (text: string): string | null => {
   const stream = tokens(text);
   let version = false,
     target: string | null = null;
-  for (const token of stream) {
-    if (
-      token.value === ".entry" ||
-      token.value === ".func" ||
-      token.value === "{"
-    )
-      break;
-    if (token.value === ".version") {
-      const value = stream.next();
-      version = !value.done && /^[0-9]+\.[0-9]+$/u.test(value.value.value);
+  try {
+    for (const token of stream) {
+      if (
+        token.value === ".entry" ||
+        token.value === ".func" ||
+        token.value === "{"
+      )
+        break;
+      if (token.value === ".version") {
+        const value = stream.next();
+        version = !value.done && /^[0-9]+\.[0-9]+$/u.test(value.value.value);
+      }
+      if (token.value === ".target") {
+        const value = stream.next();
+        target =
+          !value.done && /^sm_[0-9]+[a-z]?$/u.test(value.value.value)
+            ? value.value.value
+            : null;
+      }
+      if (version && target !== null) return target;
     }
-    if (token.value === ".target") {
-      const value = stream.next();
-      target =
-        !value.done && /^sm_[0-9]+[a-z]?$/u.test(value.value.value)
-          ? value.value.value
-          : null;
-    }
-    if (version && target !== null) return target;
+  } catch (cause) {
+    if (!(cause instanceof BinaryFormatFailure)) throw cause;
+    // A malformed quote/comment before both directives does not establish PTX identity.
   }
   return null;
 };

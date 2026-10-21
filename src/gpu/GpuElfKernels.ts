@@ -1,4 +1,4 @@
-import { readCudaInfo } from "./CudaInfo.js";
+import { readCudaInfo, readCudaParameters } from "./CudaInfo.js";
 import type { GpuKernel, GpuLocation } from "../domain/gpu/gpuCodeObjects.js";
 import {
   BinaryReader,
@@ -93,11 +93,10 @@ export const readGpuElfKernels = async (
   }
   return amdKernels(source, directory, onKernel);
 };
-const cudaKernels = async (
+const indexCudaMetadata = async (
   source: GpuSource,
   directory: NativeSectionDirectory,
-  onKernel: (kernel: GpuKernel) => void,
-): Promise<void> => {
+) => {
   const infosByText = new Map<number, NativeSection[]>(),
     sharedByText = new Map<number, NativeSection[]>();
   const registerFacts = new Map<
@@ -136,6 +135,77 @@ const cudaKernels = async (
     }
   }
   const allNamesKnown = directory.sections.every((row) => row.name !== null);
+  return {
+    source,
+    directory,
+    infosByText,
+    sharedByText,
+    registerFacts,
+    allNamesKnown,
+  };
+};
+type CudaMetadataIndex = Awaited<ReturnType<typeof indexCudaMetadata>>;
+
+const attachCudaResources = (
+  kernel: GpuKernel,
+  text: NativeSection,
+  index: CudaMetadataIndex,
+  symbolKey: string,
+): void => {
+  const { source, directory } = index;
+  const registerRows = index.registerFacts.get(symbolKey) ?? [];
+  const registerValues = new Set(registerRows.map((row) => row.value));
+  const sectionRegisters = text.info >>> 24;
+  kernel.registers.physical =
+    registerValues.size === 1
+      ? [...registerValues][0]!
+      : registerValues.size === 0 && sectionRegisters !== 0
+        ? sectionRegisters
+        : null;
+  if (registerValues.size === 1)
+    kernel.sources.registers = registerRows[0]!.location;
+  else if (sectionRegisters !== 0)
+    kernel.sources.registers = {
+      container_id: source.containerId,
+      offset: text.header_offset,
+      size: directory.bits === 64 ? 64 : 40,
+      section_index: text.index,
+      section_name: text.name,
+    };
+  if (
+    registerValues.size > 1 ||
+    (kernel.registers.physical !== null &&
+      sectionRegisters !== 0 &&
+      kernel.registers.physical !== sectionRegisters)
+  ) {
+    kernel.registers.physical = null;
+    kernel.limitations.push(
+      "Conflicting CUDA register declarations; physical count remains unknown",
+    );
+  }
+  const shared = index.sharedByText.get(text.index) ?? [];
+  kernel.shared_bytes =
+    shared.length === 1
+      ? gpuCount(shared[0]!.size)
+      : shared.length === 0 && index.allNamesKnown
+        ? 0
+        : null;
+  if (shared.length === 1)
+    kernel.sources.shared = {
+      container_id: source.containerId,
+      offset: shared[0]!.header_offset,
+      size: directory.bits === 64 ? 64 : 40,
+      section_index: shared[0]!.index,
+      section_name: shared[0]!.name,
+    };
+};
+
+const cudaKernels = async (
+  source: GpuSource,
+  directory: NativeSectionDirectory,
+  onKernel: (kernel: GpuKernel) => void,
+): Promise<void> => {
+  const index = await indexCudaMetadata(source, directory);
   for (const section of directory.sections) {
     if (section.type !== 2 && section.type !== 11) continue;
     const width = gpuCount(section.entry_size),
@@ -164,88 +234,23 @@ const cudaKernels = async (
         readElfString(names, symbol.name_offset),
         site(source, section, offset, width),
       );
-      const registerRows =
-        registerFacts.get(`${section.index}:${offset / width}`) ?? [];
-      const registerValues = new Set(registerRows.map((row) => row.value));
-      const sectionRegisters = text!.info >>> 24;
-      kernel.registers.physical =
-        registerValues.size === 1
-          ? [...registerValues][0]!
-          : registerValues.size === 0 && sectionRegisters !== 0
-            ? sectionRegisters
-            : null;
-      if (registerValues.size === 1)
-        kernel.sources.registers = registerRows[0]!.location;
-      else if (sectionRegisters !== 0)
-        kernel.sources.registers = {
-          container_id: source.containerId,
-          offset: text!.header_offset,
-          size: directory.bits === 64 ? 64 : 40,
-          section_index: text!.index,
-          section_name: text!.name,
-        };
-      if (
-        registerValues.size > 1 ||
-        (kernel.registers.physical !== null &&
-          sectionRegisters !== 0 &&
-          kernel.registers.physical !== sectionRegisters)
-      ) {
-        kernel.registers.physical = null;
-        kernel.limitations.push(
-          "Conflicting CUDA register declarations; physical count remains unknown",
-        );
-      }
-      const shared = sharedByText.get(text!.index) ?? [];
-      kernel.shared_bytes =
-        shared.length === 1
-          ? gpuCount(shared[0]!.size)
-          : shared.length === 0 && allNamesKnown
-            ? 0
-            : null;
-      if (shared.length === 1)
-        kernel.sources.shared = {
-          container_id: source.containerId,
-          offset: shared[0]!.header_offset,
-          size: directory.bits === 64 ? 64 : 40,
-          section_index: shared[0]!.index,
-          section_name: shared[0]!.name,
-        };
-      const infos = infosByText.get(text!.index) ?? [];
+      attachCudaResources(
+        kernel,
+        text!,
+        index,
+        `${section.index}:${offset / width}`,
+      );
+      const infos = index.infosByText.get(text!.index) ?? [];
       if (infos.length === 1) {
-        const info = await sectionBytes(source, infos[0]!);
-        const parameters: GpuKernel["parameters"] = [];
-        let complete = true;
+        const decoded = readCudaParameters(
+          await sectionBytes(source, infos[0]!),
+          directory.little,
+        );
         kernel.sources.parameters = site(source, infos[0]!);
-        for (const record of readCudaInfo(info, directory.little)) {
-          if (record.format === 3 && record.attribute === 0x19)
-            kernel.parameter_bytes = record.value;
-          if (record.format === 4 && record.attribute === 0x17) {
-            if (record.data.length !== 12) complete = false;
-            else {
-              const r = new BinaryReader(record.data, directory.little);
-              parameters.push({
-                ordinal: r.u16(4),
-                name: null,
-                offset: r.u16(6),
-                size: r.u32(8) >>> 18,
-                type: null,
-                hidden: null,
-              });
-            }
-          }
-        }
-        parameters.sort((a, b) => a.ordinal - b.ordinal);
-        if (parameters.some((row, index) => row.ordinal !== index))
-          complete = false;
-        kernel.parameters = parameters;
-        kernel.parameter_count =
-          complete && (parameters.length > 0 || kernel.parameter_bytes === 0)
-            ? parameters.length
-            : null;
-        if (!complete)
-          kernel.limitations.push(
-            "CUDA parameter records have unsupported sizes, duplicate ordinals or gaps; parameter count is unknown",
-          );
+        kernel.parameter_bytes = decoded.parameter_bytes;
+        kernel.parameter_count = decoded.parameter_count;
+        kernel.parameters = decoded.parameters;
+        kernel.limitations.push(...decoded.limitations);
       } else
         kernel.limitations.push(
           "Exactly one matching CUDA nv.info parameter section was not available",

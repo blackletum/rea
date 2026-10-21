@@ -3,7 +3,9 @@ import { BinaryResourceFailure } from "../native/metadata/BinaryContainer.js";
 import { rejectGpu } from "./GpuSource.js";
 
 /** Validate allocation and nesting costs before the standard decoder allocates containers. */
-const preflight = (bytes: Buffer): void => {
+const utf8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+const preflight = (bytes: Buffer): Set<string> => {
+  const strings = new Set<string>();
   let at = 0,
     values = 0;
   const take = (size: number): number => {
@@ -13,7 +15,7 @@ const preflight = (bytes: Buffer): void => {
     at += size;
     return start;
   };
-  const value = (depth: number): void => {
+  const value = (depth: number): string | undefined => {
     if (depth > 32 || ++values > 262144)
       throw new BinaryResourceFailure(
         "structure",
@@ -21,6 +23,9 @@ const preflight = (bytes: Buffer): void => {
         "AMDGPU metadata exceeds depth 32 or 262144 decoded values",
       );
     const code = bytes[take(1)]!;
+    const string =
+      (code & 0xe0) === 0xa0 || code === 0xd9 || code === 0xda || code === 0xdb;
+    const map = (code & 0xf0) === 0x80 || code === 0xde || code === 0xdf;
     let count = 0,
       payload = 0;
     if (
@@ -67,11 +72,30 @@ const preflight = (bytes: Buffer): void => {
         262144,
         "AMDGPU metadata container/string exceeds its allocation budget",
       );
-    take(payload);
-    for (let index = 0; index < count; index++) value(depth + 1);
+    const start = take(payload);
+    if (string) {
+      strings.add(`${bytes.byteOffset + start}:${payload}`);
+      try {
+        return utf8.decode(bytes.subarray(start, start + payload));
+      } catch {
+        return rejectGpu("AMDGPU metadata contains invalid UTF-8");
+      }
+    }
+    if (map) {
+      const keys = new Set<string>();
+      for (let index = 0; index < count; index += 2) {
+        const key = value(depth + 1);
+        if (key === undefined || keys.has(key))
+          rejectGpu("AMDGPU metadata map has non-string or duplicate keys");
+        keys.add(key!);
+        value(depth + 1);
+      }
+    } else for (let index = 0; index < count; index++) value(depth + 1);
+    return undefined;
   };
   value(0);
   if (at !== bytes.length) rejectGpu("Trailing AMDGPU MessagePack values");
+  return strings;
 };
 export const readAmdMetadata = (bytes: Buffer): unknown => {
   if (bytes.length > 8 * 1024 * 1024)
@@ -80,16 +104,57 @@ export const readAmdMetadata = (bytes: Buffer): unknown => {
       8 * 1024 * 1024,
       "AMDGPU metadata exceeds 8 MiB",
     );
-  preflight(bytes);
+  const strings = preflight(bytes);
+  const stringValue = (value: unknown): string => {
+    if (
+      !(value instanceof Uint8Array) ||
+      value.buffer !== bytes.buffer ||
+      !strings.has(`${value.byteOffset}:${value.byteLength}`)
+    )
+      return rejectGpu("AMDGPU metadata map key is not a string");
+    return utf8.decode(value);
+  };
+  // rawStrings avoids the standard decoder's native UTF-8 path stripping a
+  // leading BOM. The preflight retains original type tags, so binary values
+  // cannot accidentally become strings during this bounded in-place walk.
+  const normalize = (value: unknown): unknown => {
+    if (value instanceof Uint8Array)
+      return value.buffer === bytes.buffer &&
+        strings.has(`${value.byteOffset}:${value.byteLength}`)
+        ? stringValue(value)
+        : value;
+    if (Array.isArray(value)) {
+      for (let index = 0; index < value.length; index++)
+        value[index] = normalize(value[index]);
+    } else if (value !== null && typeof value === "object")
+      for (const key of Object.keys(value)) {
+        const record = value as Record<string, unknown>;
+        record[key] = normalize(record[key]);
+      }
+    return value;
+  };
   try {
-    return decode(bytes, {
-      useBigInt64: true,
-      maxStrLength: 65536,
-      maxBinLength: 65536,
-      maxArrayLength: 65536,
-      maxMapLength: 65536,
-      maxExtLength: 0,
-    });
+    return normalize(
+      decode(bytes, {
+        rawStrings: true,
+        keyDecoder: {
+          canBeCached: () => true,
+          decode: (source, offset, length) =>
+            utf8.decode(source.subarray(offset, offset + length)),
+        },
+        mapKeyConverter: (key) => {
+          if (typeof key !== "string")
+            return rejectGpu("AMDGPU metadata map key is not a string");
+          return key;
+        },
+        useBigInt64: true,
+        maxStrLength: 65536,
+        maxBinLength: 65536,
+        maxArrayLength: 65536,
+        maxMapLength: 65536,
+        maxExtLength: 0,
+      }),
+    );
   } catch {
     return rejectGpu("Malformed AMDGPU MessagePack metadata");
   }

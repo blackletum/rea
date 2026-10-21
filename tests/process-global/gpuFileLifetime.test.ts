@@ -1,5 +1,5 @@
 import { expect, it, vi } from "vitest";
-import { open, writeFile } from "node:fs/promises";
+import { open, writeFile, unlink } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import { join } from "node:path";
 import { GpuCodeObjectsProvider } from "../../src/gpu/GpuCodeObjectsProvider.js";
@@ -193,6 +193,33 @@ it("joins an admitted file read during shutdown and rejects overlapping work", a
     release();
     await active;
     await closing;
+    spy.mockRestore();
+    await provider.close();
+  }
+});
+
+it("classifies removal of an admitted named source as changed identity", async () => {
+  const { path, prototype, provider } = await fixture();
+  const read = prototype.read;
+  let removed = false;
+  const spy = vi.spyOn(prototype, "read").mockImplementation(async function (
+    this: FileHandle,
+    ...args: Parameters<ReadFile>
+  ) {
+    const result = await read.apply(this, args);
+    if (!removed) {
+      removed = true;
+      await unlink(path);
+    }
+    return result;
+  });
+  try {
+    const result = await provider.inspect({ path, analysis: "kernels" });
+    expect(result).toMatchObject({
+      ok: false,
+      error: { _tag: "AnalysisArtifactChangedError" },
+    });
+  } finally {
     spy.mockRestore();
     await provider.close();
   }

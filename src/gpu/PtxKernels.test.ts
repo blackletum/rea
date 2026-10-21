@@ -48,3 +48,8 @@ it.each([
 ])("rejects incomplete PTX %s", (text) => {
   expect(() => [...readPtxKernels(text, "object")]).toThrow();
 });
+
+it("does not label unrelated malformed quoted text as a recognized PTX artifact", () => {
+  expect(readPtxTarget('unrelated "unterminated')).toBeNull();
+  expect(readPtxTarget("/* unrelated unterminated")).toBeNull();
+});

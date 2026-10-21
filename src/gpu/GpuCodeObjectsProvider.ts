@@ -273,7 +273,21 @@ export class GpuCodeObjectsProvider implements GpuCodeObjectsPort {
     retainProgress?.({ inventory, size });
     const format = await inventory.inspect(source);
     const after = await file.stat({ bigint: true });
-    const named = await lstat(input.path, { bigint: true });
+    const named = await lstat(input.path, { bigint: true }).catch(
+      (cause: unknown) => {
+        if (
+          cause instanceof Error &&
+          "code" in cause &&
+          ["ENOENT", "ENOTDIR", "ELOOP"].includes(String(cause.code))
+        )
+          throw new ArtifactReaderFailure(
+            "integrity",
+            "Selected GPU path changed during inspection",
+            { cause },
+          );
+        throw cause;
+      },
+    );
     if ([after, named].some((state) => !sameRegularFileState(initial, state)))
       throw new ArtifactReaderFailure(
         "integrity",
@@ -283,6 +297,7 @@ export class GpuCodeObjectsProvider implements GpuCodeObjectsPort {
       (row) =>
         row.kind !== "cuda-fatbin" &&
         row.kind !== "hip-bundle" &&
+        row.kind !== "native-section" &&
         row.kind !== "host",
     );
     return gpuCodeObjectsSchema.parse({
@@ -298,6 +313,7 @@ export class GpuCodeObjectsProvider implements GpuCodeObjectsPort {
       kernels: inventory.kernels,
       ptx_artifacts: inventory.ptx_artifacts,
       coverage: {
+        discovery_scope: "supported-section-names-and-standalone-formats",
         discovery: inventory.discovery,
         payloads:
           input.analysis === "inventory"

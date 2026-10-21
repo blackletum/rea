@@ -1,6 +1,8 @@
 import { expect, it, onTestFinished } from "vitest";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { parseEvidence } from "../../../src/domain/evidence.js";
+import { gpuCodeObjectsPartialSchema } from "../../../src/domain/gpu/gpuCodeObjects.js";
 import { GpuCodeObjectsProvider } from "../../../src/gpu/GpuCodeObjectsProvider.js";
 import { createTestTempDirectory } from "../../fixtures/temporaryDirectory.js";
 import {
@@ -173,4 +175,37 @@ it("rejects a changed full-file identity before applying positional object selec
     ok: false,
     error: { _tag: "AnalysisArtifactChangedError" },
   });
+});
+it("iterates mixed plain/CCOB bundles without counting flat records as nesting", async () => {
+  const records = Array.from({ length: 20 }, (_, index) =>
+    index % 2 === 0 ? hipFixture() : ccobFixture(),
+  );
+  const result = await inspect(Buffer.concat(records));
+  if (!result.ok) throw result.error;
+  expect(result.value.kernels).toHaveLength(20);
+  expect(result.value.coverage.discovery).toBe("complete");
+});
+it("continues at the declared CCOB boundary after an unsupported codec", async () => {
+  const unknown = ccobFixture();
+  unknown.writeUInt16LE(99, 6);
+  const result = await inspect(Buffer.concat([unknown, ccobFixture()]));
+  if (!result.ok) throw result.error;
+  expect(result.value.kernels).toHaveLength(1);
+  expect(result.value.coverage.discovery).toBe("partial");
+});
+
+it("refuses escaped PTX report expansion while preserving bounded interrupted facts", async () => {
+  const text = ptxFixture + "\n//" + "\u0001".repeat(3 * 1024 * 1024);
+  const result = await inspect(Buffer.from(text));
+  expect(result).toMatchObject({
+    ok: false,
+    error: { _tag: "AnalysisResourceConstraintError" },
+  });
+  if (result.ok) throw new Error("expected representation capacity refusal");
+  const partial = gpuCodeObjectsPartialSchema.parse(
+    parseEvidence(result.error.partialObservation).normalized_result,
+  );
+  expect(partial.ptx_artifacts).toEqual([]);
+  expect(partial.objects).toHaveLength(1);
+  expect(partial.artifact.sha256).toBeNull();
 });

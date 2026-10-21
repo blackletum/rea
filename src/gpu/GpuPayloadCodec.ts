@@ -1,4 +1,4 @@
-import { inflate, zstdDecompress } from "node:zlib";
+import { constants, inflate, zstdDecompress } from "node:zlib";
 import { promisify } from "node:util";
 import { assertArtifactReadActive } from "../artifacts/ArtifactFileOperation.js";
 import { decodeLz4Block } from "./Lz4Block.js";
@@ -15,9 +15,13 @@ export const decodeGpuPayload = async (
   if (compression === "lz4") return decodeLz4Block(bytes, expected, signal);
   let decoded: Buffer;
   try {
-    decoded = await (compression === "zstd" ? unzstd : unzip)(bytes, {
-      maxOutputLength: Math.max(1, expected),
-    });
+    const maxOutputLength = Math.max(1, expected);
+    decoded = await (compression === "zstd"
+      ? unzstd(bytes, {
+          maxOutputLength,
+          params: { [constants.ZSTD_d_windowLogMax]: 27 },
+        })
+      : unzip(bytes, { maxOutputLength }));
   } catch {
     assertArtifactReadActive(signal);
     return rejectGpu(

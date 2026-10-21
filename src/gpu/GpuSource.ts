@@ -11,6 +11,16 @@ import type {
 } from "../native/metadata/NativeSectionDirectory.js";
 export const GPU_OBJECT_BYTES = 128 * 1024 * 1024;
 export const GPU_REPORT_BYTES = 16 * 1024 * 1024;
+/** A retained-facts refusal aborts discovery; it is never downgraded to one opaque payload. */
+export class GpuReportCapacityFailure extends BinaryResourceFailure {
+  constructor() {
+    super(
+      "structure",
+      GPU_REPORT_BYTES,
+      "GPU facts exceed the 16 MiB retained report budget",
+    );
+  }
+}
 export const rejectGpu = (message: string): never => {
   throw new BinaryFormatFailure("malformed", message);
 };
@@ -116,13 +126,16 @@ export const nextGpuContainerOffset = async (
   source: GpuSource,
   start: number,
 ): Promise<number> => {
-  for (let position = start; position < source.size; position += 65536) {
+  let width = 64;
+  for (let position = start; position < source.size;) {
     const bytes = await source.read(
       position,
-      Math.min(65536, source.size - position),
+      Math.min(width, source.size - position),
     );
     const index = bytes.findIndex((byte) => byte !== 0);
     if (index >= 0) return position + index;
+    position += bytes.length;
+    width = 65536;
   }
   return source.size;
 };

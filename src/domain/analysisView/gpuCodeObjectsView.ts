@@ -104,6 +104,7 @@ const summarizeGpuTargets = (report: GpuCodeObjects): GpuTarget[] => {
     if (
       object.kind === "cuda-fatbin" ||
       object.kind === "hip-bundle" ||
+      object.kind === "native-section" ||
       object.kind === "host"
     )
       continue;

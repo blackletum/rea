@@ -18,6 +18,7 @@ export const gpuObjectSchema = z.strictObject({
   kind: z.enum([
     "cuda-fatbin",
     "hip-bundle",
+    "native-section",
     "ptx",
     "cubin",
     "amdgpu",
@@ -110,6 +111,9 @@ export const gpuCodeObjectsObjectSchema = z.strictObject({
   kernels: z.array(gpuKernelSchema),
   ptx_artifacts: z.array(gpuPtxArtifactSchema),
   coverage: z.strictObject({
+    discovery_scope: z.literal(
+      "supported-section-names-and-standalone-formats",
+    ),
     discovery: z.enum(["complete", "partial"]),
     payloads: z.enum(["not-requested", "complete", "partial"]),
     examined_sections: count,
