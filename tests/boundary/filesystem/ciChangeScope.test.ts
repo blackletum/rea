@@ -1558,6 +1558,9 @@ it.each([
   "test:prepare",
   "docs:prepare",
   "verify:frida:bindings",
+  "prebuild:cached",
+  "postcompile",
+  "pretypecheck",
 ])(
   "selects fallback host checks when compiler command %s changes",
   async (name) => {

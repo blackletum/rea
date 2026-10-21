@@ -81,7 +81,7 @@ function classifyPackage(base, head) {
     "test:prepare",
     "docs:prepare",
     "verify:frida:bindings",
-  ];
+  ].flatMap((name) => [name, `pre${name}`, `post${name}`]);
   selected.package ||=
     JSON.stringify(compilerDependencies(before)) !==
       JSON.stringify(compilerDependencies(after)) ||

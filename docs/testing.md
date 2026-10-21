@@ -666,8 +666,11 @@ missing entries are omitted as whole entries, and consumers rebuild cache misses
 including when every entry is unavailable. Malformed plans, non-file entries,
 and I/O errors other than disappearance still fail publication. After a trusted
 static run, superseded cross-run Turbo snapshots for that OS and architecture
-are deleted down to the two newest generations. The Windows lane relies on the Linux static job for typechecking. They retain the normal build and prepack
-commands, which restore matching outputs or rebuild on a cache miss. Native
+are deleted down to the two newest generations. The Windows lane also runs the
+official compiler's complete source typecheck with two checker threads,
+independently of the accelerated Linux checker. Both lanes retain the normal
+build and prepack commands, which restore matching outputs or rebuild on a cache
+miss. Native
 artifacts, dependency installs, package archives, and runtime verification remain
 host-local. Keep platform-dependent outputs out of this shared cache.
 
