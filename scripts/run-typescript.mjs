@@ -30,8 +30,14 @@ const main = async () => {
     process.arch,
     rustPackage.optionalDependencies,
   );
-  const packagePath = require.resolve(`${compiler}/package.json`);
-  const metadata = JSON.parse(readFileSync(packagePath, "utf8"));
+  const packagePath =
+    compiler === "tsrs"
+      ? rustPackagePath
+      : require.resolve("typescript-native/package.json");
+  const metadata =
+    compiler === "tsrs"
+      ? rustPackage
+      : JSON.parse(readFileSync(packagePath, "utf8"));
   const command = compiler === "tsrs" ? "tsrs" : "tsc";
   if (compiler === "tsrs")
     process.argv.splice(

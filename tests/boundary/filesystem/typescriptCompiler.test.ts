@@ -25,7 +25,7 @@ const officialPackage = z
   .object({ version: z.string() })
   .parse(
     JSON.parse(
-      await readFile(require.resolve("typescript/package.json"), "utf8"),
+      await readFile(require.resolve("typescript-native/package.json"), "utf8"),
     ),
   );
 const execute = (script: string, args: string[]) =>
@@ -121,7 +121,11 @@ it.skipIf(process.platform === "win32")(
     const script = join(root, "run-typescript.mjs");
     await copyFile(launcher, script);
     for (const name of ["tsrs", "typescript"]) {
-      const directory = join(root, "node_modules", name);
+      const directory = join(
+        root,
+        "node_modules",
+        name === "tsrs" ? name : "typescript-native",
+      );
       await mkdir(directory, { recursive: true });
       await writeFile(
         join(directory, "package.json"),

@@ -49,14 +49,17 @@ Source typechecking needs no compiled runtime or generated test metadata.
 Typecheck, runtime compilation, and Frida binding verification share
 `scripts/run-typescript.mjs`. The pinned tsrs package supplies Linux x64/arm64
 (GNU and musl) and macOS arm64 compilers. Windows and other unsupported hosts
-retain the official Go TypeScript compiler, pinned to the matching 7.1 development
-snapshot to keep both host paths on the same upstream version. A missing binary on a supported host
-fails with the package's installation diagnostic; it does not silently fall back.
-The Rust compiler defaults to at most two checker threads. For `--noEmit`
-checks, `--maxMemory 3G` also sets a soft memory target; emit builds do not use
-that target. Explicit compiler arguments can override the defaults. These
-controls do not impose a process-family memory limit. Termux's explicit build and Stryker's compiler
-API dependency retain their existing TypeScript versions.
+retain the official Go TypeScript compiler through `typescript-native`, pinned
+to the matching 7.1 development snapshot to keep both host paths on the same
+upstream version. A missing binary on a supported host fails with the package's
+installation diagnostic; it does not silently fall back. The Rust compiler
+defaults to at most two checker threads. For `--noEmit` checks, `--maxMemory 3G`
+also sets a soft memory target; emit builds do not use that target. Explicit
+compiler arguments can override the defaults. These controls do not impose a
+process-family memory limit. Termux's explicit build and Stryker's compiler API
+dependency retain their existing TypeScript versions. The stable `typescript`
+package also remains for existing fixture oracles and Stryker's peer constraint,
+which does not admit prerelease versions.
 
 `npm run build:cached` compiles the CLI/MCP runtime and its packaged skill.
 Turbo's strict task environment preserves caller-selected `GOMAXPROCS`,
