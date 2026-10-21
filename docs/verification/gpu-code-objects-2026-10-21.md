@@ -23,9 +23,9 @@ Released Linux and Windows nvJPEG 12.4.0.76 artifacts each contain 165 CUBIN and
 10 PTX payloads, with 3,968 kernel declarations across 15 target declarations.
 Independent extraction matched all 165 decoded CUBIN hashes and all 10 PTX byte
 sequences; cuobjdump resource output matched all 3,720 native kernel
-name/register/shared-memory tuples. Final MCP workflows rechecked the Linux
+name/register/shared-memory tuples. Pre-review MCP workflows rechecked the Linux
 sm_100 subset's 248 complete kernel facts against those prior oracle facts.
-The final public CLI analyzed the entire Windows DLL, exported complete
+The pre-review public CLI analyzed the entire Windows DLL, exported complete
 Evidence, and reproduced all previously verified facts exactly.
 
 Windows validation ran on Linux: LLVM independently identified the PE section
@@ -33,7 +33,7 @@ coordinates, and cuobjdump consumed its extracted fatbin. cuobjdump did not
 recognize the DLL directly. This does not establish Windows runtime behavior,
 GPU execution, host launch correlation or legacy AMDGPU YAML support.
 
-## Equivalent completed MCP workflows
+## Initial completed MCP workflows
 
 Both fresh stdio MCP sessions analyzed only `sm_100` in the same Linux library,
 retained 176 inventory objects and 248 kernel facts, queried the same named
@@ -72,7 +72,7 @@ descendants every 20 ms and is approximate; the observer is excluded.
 
 ## Regression checks
 
-- The final focused run passed 265 tests in 19 files: GPU domain/codec/parser
+- The initial focused run passed 265 tests in 19 files: GPU domain/codec/parser
   cases, public CLI/MCP, retained views, output profiles, cancellation and cleanup,
   plus shared ELF/PE Go, Rust and IL2CPP consumers.
 - Full static checks passed before the catalog/docs-only follow-up; its receipt
@@ -114,3 +114,61 @@ MCP, metadata capacity and cleanup. A further 10 product-catalog cases passed
 after adding the missing CLI `analysis` option description identified by CI.
 The earlier paired nvJPEG measurements remain pinned to their original runtime;
 these follow-ups do not establish a new CUDA performance result.
+
+## Bounded metadata and partial-fact review
+
+The latest qualification at `ad1e17a` rebases onto main `5241597`, preserving
+both Rust and GPU retained views. All 70 focused cases in nine files passed,
+including both public CLI/MCP workflows; the separate SDK-converted canonical
+schema suite passed all 15 cases.
+
+CUDA parsing shares an aggregate 262,144 record/symbol visit budget, 128 MiB
+section-read budget and 16 MiB serialized-size accounting budget for index facts.
+Equal scoped byte ranges and duplicate register values are coalesced before
+index growth; conflicting values survive. Parsed parameter metadata is reused.
+The public CLI completed an 861,896-byte CUBIN containing 1,024 headers aliasing
+65,536 records and retained the correct physical count. The old 67-million-entry
+expansion is source-derived; it was not run to exhaustion.
+
+Decoder coverage now reaches object, report and target pages: absent CUBIN
+symbol tables and unknown section names remain partial. AMD note parsing uses
+a tagged Result that retains earlier parsed notes on later malformed, capacity,
+unsupported or interrupted reads; retained kernel facts are emitted before the
+original failure is propagated. Standalone PTX recognition continues beyond the
+64 KiB fast path up to its actual 16 MiB text budget and reuses complete probe
+bytes. Unsupported/overflowing register counts stay null instead of low totals.
+
+The public CLI verified an AMD valid-note/truncated-note input and a PTX file
+with a 70 KiB leading comment, in addition to the alias case. Those three tasks
+together took 5.132 seconds / 6.222 CPU seconds / 405,835,776 peak family RSS
+bytes, including the Python driver. Regression cases additionally cover invalid
+MessagePack and unsupported extensions in standalone and bundled AMD objects.
+
+The revised Windows DLL workflow preserved all 165 decoded CUBIN hashes, all
+10 PTX byte identities and all 3,720 native kernel facts. Independently counting
+register declarations in cuobjdump-extracted PTX verified all 248 PTX kernels;
+20 kernel totals now correctly include previously missed declarations. This
+is a virtual-declaration oracle, not physical allocation or GPU execution.
+The Linux sm_100 workflows still match all 248 independently checked native
+kernel facts. All nine real producer artifacts retain complete payload coverage.
+
+The latest complete/selected MCP pair performed the same six calls and answered
+the same question as the initial pair. Receipts retain both measurement stages.
+
+| Cost                                                      | Complete report | Selected page |
+| --------------------------------------------------------- | --------------: | ------------: |
+| Used input declarations + primary calls, estimated tokens |         407,368 |        26,612 |
+| All input declarations + primary calls, estimated tokens  |         636,495 |       255,739 |
+| Full catalog + all six calls, estimated tokens            |       1,480,698 |     1,099,942 |
+| Process-family elapsed seconds                            |          15.487 |        15.923 |
+| Process-family CPU seconds                                |          18.404 |        18.760 |
+| Peak family RSS bytes                                     |   1,251,254,272 | 1,201,774,592 |
+
+These remain tokenizer estimates and same-code workflow variants. The single
+latest pair establishes no general latency/CPU/memory improvement; OS caches
+and host contention remain uncontrolled. The Windows CLI rerun completed in
+4.078 seconds / 4.880 CPU seconds / 498,380,800 peak family RSS bytes.
+
+Main CI independently reproduced the browser termination and WASM optional-input
+assertion failures without GPU changes. Cancelled fail-fast shards are not
+counted as passing. Those baseline failures are outside this feature's fixes.

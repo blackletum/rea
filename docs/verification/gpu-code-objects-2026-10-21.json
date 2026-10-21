@@ -593,5 +593,478 @@
     },
     "ownership": "Bounded AMD ELF note parser produces target plus parsed kernel declarations once; inventory discovers target before filtering and selected projection reuses prepared notes. The 8 MiB budget applies to aggregate encoded source-note bytes, before their reads; parsed JS representation expands. Prepared notes live only for one payload inspection. CLI parses each named JSON option and preserves the full parsed input for schema diagnostics.",
     "performance_scope": "The paired nvJPEG MCP measurements above remain pinned to their original qualified runtime; this follow-up does not claim a new CUDA speed/memory result."
+  },
+  "bounded_metadata_review": {
+    "source_revision": "ad1e17add9e9daacf0cb60c33d5bf359cf631eab",
+    "source_tree": "2d4536b06abab51837cf88bc196d415fe4194832",
+    "base_revision": "52415975942a4b9c53a817915b313ccc404f280e",
+    "focused_tests": {
+      "files": 9,
+      "passed": 70
+    },
+    "sdk_schema_tests": {
+      "files": 1,
+      "passed": 15
+    },
+    "tasks": {
+      "rebased-review-focused": {
+        "resource_receipt": {
+          "command": [
+            "taskset",
+            "-c",
+            "0,1",
+            "npm",
+            "run",
+            "test:focused",
+            "--",
+            "tests/acceptance/gpuCodeObjectsCli.test.ts",
+            "tests/boundary/gpu/codeObjects.test.ts",
+            "tests/process-global/gpuFileLifetime.test.ts",
+            "src/gpu/CudaInfo.test.ts",
+            "src/gpu/PtxKernels.test.ts",
+            "src/domain/gpu/gpuCodeObjects.test.ts",
+            "tests/boundary/filesystem/productCatalog.test.ts",
+            "src/domain/analysisView/rustBinaryView.test.ts",
+            "tests/acceptance/rustDependencyViews.test.ts"
+          ],
+          "exit_code": 0,
+          "wall_s": 167.9911166489983,
+          "cpu_s": 316.988263,
+          "cpu_accounting": "payload family wait rusage delta; inherited shell child usage excluded",
+          "peak_family_rss_bytes": 3486601216,
+          "sample_ms": 20,
+          "guard_stop": null
+        }
+      },
+      "revised-schema-isolated": {
+        "resource_receipt": {
+          "command": [
+            "taskset",
+            "-c",
+            "0,1",
+            "npm",
+            "run",
+            "test:focused",
+            "--",
+            "tests/boundary/mcp/toolSchemaValidity.test.ts"
+          ],
+          "exit_code": 0,
+          "wall_s": 43.76464435999878,
+          "cpu_s": 50.095241,
+          "cpu_accounting": "payload family wait rusage delta; inherited shell child usage excluded",
+          "peak_family_rss_bytes": 1928617984,
+          "sample_ms": 20,
+          "guard_stop": null
+        }
+      },
+      "revised-full": {
+        "resource_receipt": {
+          "command": [
+            "taskset",
+            "-c",
+            "0,1",
+            "node",
+            "/home/yann/yann/rea-5345-lab/bench.mjs",
+            "/home/yann/yann/rea-5345-gpu-code-objects",
+            "revised-full",
+            "full"
+          ],
+          "exit_code": 0,
+          "wall_s": 15.4867707600024,
+          "cpu_s": 18.404025999999998,
+          "cpu_accounting": "payload family wait rusage delta; inherited shell child usage excluded",
+          "peak_family_rss_bytes": 1251254272,
+          "sample_ms": 20,
+          "guard_stop": null
+        },
+        "task_receipt": {
+          "runtime": "/home/yann/yann/rea-5345-gpu-code-objects",
+          "label": "revised-full",
+          "mode": "full",
+          "target": "/home/yann/yann/rea-5345-lab/fixtures/libnvjpeg.so.12.4.0.76",
+          "task": "Read sm_100 parameter layout, physical registers and shared memory for the named kernel, retain source Evidence and repeat the historical query three times",
+          "answer": [
+            {
+              "name": "_ZN6nvjpeg33dctQuantInvJpegKernelMultiChannelI7ushort2Li1ELi32ELi8EEEvNS_24InvDctParamsMultiChannelE",
+              "n": 1,
+              "bytes": 168,
+              "parameters": [
+                {
+                  "ordinal": 0,
+                  "name": null,
+                  "offset": 0,
+                  "size": 168,
+                  "type": null,
+                  "hidden": null
+                }
+              ],
+              "registers": {
+                "physical": 31,
+                "sgpr": null,
+                "vgpr": null,
+                "agpr": null,
+                "virtual": []
+              },
+              "shared": 9216
+            }
+          ],
+          "objects": 176,
+          "kernels": 248,
+          "coverage": {
+            "discovery": "complete",
+            "discovery_scope": "supported-section-names-and-standalone-formats",
+            "examined_sections": 33,
+            "payloads": "partial",
+            "unknown_section_names": 0
+          },
+          "used_input_declarations_plus_primary_estimated_tokens": 407368,
+          "all_input_declarations_plus_primary_estimated_tokens": 636495,
+          "catalog_and_all_calls_estimated_tokens": 1480698,
+          "token_accounting": "tokenx estimates of advertised declarations, arguments and full SDK replies; initialize and JSON-RPC envelopes omitted; not actual model usage",
+          "task_wall_s": 14.930120244,
+          "call_times_ms": [
+            {
+              "name": "inspect_gpu_code_objects",
+              "wall_ms": 8648.842552000002
+            },
+            {
+              "name": "inspect_analysis_view",
+              "wall_ms": 392.55837599999904
+            },
+            {
+              "name": "export_evidence_bundle",
+              "wall_ms": 32.70938000000024
+            },
+            {
+              "name": "inspect_analysis_view",
+              "wall_ms": 12.31524999999965
+            },
+            {
+              "name": "inspect_analysis_view",
+              "wall_ms": 11.467388999999457
+            },
+            {
+              "name": "inspect_analysis_view",
+              "wall_ms": 11.990239999999176
+            }
+          ]
+        }
+      },
+      "revised-selected": {
+        "resource_receipt": {
+          "command": [
+            "taskset",
+            "-c",
+            "0,1",
+            "node",
+            "/home/yann/yann/rea-5345-lab/bench.mjs",
+            "/home/yann/yann/rea-5345-gpu-code-objects",
+            "revised-selected",
+            "selected"
+          ],
+          "exit_code": 0,
+          "wall_s": 15.923008769001171,
+          "cpu_s": 18.760102,
+          "cpu_accounting": "payload family wait rusage delta; inherited shell child usage excluded",
+          "peak_family_rss_bytes": 1201774592,
+          "sample_ms": 20,
+          "guard_stop": null
+        },
+        "task_receipt": {
+          "runtime": "/home/yann/yann/rea-5345-gpu-code-objects",
+          "label": "revised-selected",
+          "mode": "selected",
+          "target": "/home/yann/yann/rea-5345-lab/fixtures/libnvjpeg.so.12.4.0.76",
+          "task": "Read sm_100 parameter layout, physical registers and shared memory for the named kernel, retain source Evidence and repeat the historical query three times",
+          "answer": [
+            {
+              "name": "_ZN6nvjpeg33dctQuantInvJpegKernelMultiChannelI7ushort2Li1ELi32ELi8EEEvNS_24InvDctParamsMultiChannelE",
+              "n": 1,
+              "bytes": 168,
+              "parameters": [
+                {
+                  "ordinal": 0,
+                  "name": null,
+                  "offset": 0,
+                  "size": 168,
+                  "type": null,
+                  "hidden": null
+                }
+              ],
+              "registers": {
+                "physical": 31,
+                "sgpr": null,
+                "vgpr": null,
+                "agpr": null,
+                "virtual": []
+              },
+              "shared": 9216
+            }
+          ],
+          "objects": 176,
+          "kernels": 248,
+          "coverage": {
+            "discovery": "complete",
+            "discovery_scope": "supported-section-names-and-standalone-formats",
+            "examined_sections": 33,
+            "payloads": "partial",
+            "unknown_section_names": 0
+          },
+          "used_input_declarations_plus_primary_estimated_tokens": 26612,
+          "all_input_declarations_plus_primary_estimated_tokens": 255739,
+          "catalog_and_all_calls_estimated_tokens": 1099942,
+          "token_accounting": "tokenx estimates of advertised declarations, arguments and full SDK replies; initialize and JSON-RPC envelopes omitted; not actual model usage",
+          "task_wall_s": 15.387531861,
+          "call_times_ms": [
+            {
+              "name": "inspect_gpu_code_objects",
+              "wall_ms": 8730.058778999999
+            },
+            {
+              "name": "inspect_analysis_view",
+              "wall_ms": 402.6264579999988
+            },
+            {
+              "name": "export_evidence_bundle",
+              "wall_ms": 43.726230000000214
+            },
+            {
+              "name": "inspect_analysis_view",
+              "wall_ms": 10.474229000001287
+            },
+            {
+              "name": "inspect_analysis_view",
+              "wall_ms": 10.128700999999637
+            },
+            {
+              "name": "inspect_analysis_view",
+              "wall_ms": 10.954589000000851
+            }
+          ]
+        }
+      },
+      "revised-windows-cli": {
+        "resource_receipt": {
+          "command": [
+            "taskset",
+            "-c",
+            "0,1",
+            "node",
+            "scripts/rea.mjs",
+            "inspect-gpu-code-objects",
+            "/home/yann/yann/rea-5345-lab/fixtures/nvjpeg64_12.dll",
+            "--analysis",
+            "kernels",
+            "--detail",
+            "summary",
+            "--view",
+            "{\"collection\":\"targets\"}",
+            "--evidence_output",
+            "/home/yann/yann/rea-5345-lab/revised-windows-evidence.json",
+            "--json"
+          ],
+          "exit_code": 0,
+          "wall_s": 4.078310482000234,
+          "cpu_s": 4.879858,
+          "cpu_accounting": "payload family wait rusage delta; inherited shell child usage excluded",
+          "peak_family_rss_bytes": 498380800,
+          "sample_ms": 20,
+          "guard_stop": null
+        }
+      },
+      "revised-edge-cli": {
+        "resource_receipt": {
+          "command": [
+            "taskset",
+            "-c",
+            "0,1",
+            "python3",
+            "/home/yann/yann/rea-5345-lab/verify-review-edges.py"
+          ],
+          "exit_code": 0,
+          "wall_s": 5.132059294999635,
+          "cpu_s": 6.221724999999999,
+          "cpu_accounting": "payload family wait rusage delta; inherited shell child usage excluded",
+          "peak_family_rss_bytes": 405835776,
+          "sample_ms": 20,
+          "guard_stop": null
+        }
+      },
+      "revised-producer-fixtures": {
+        "resource_receipt": {
+          "command": [
+            "taskset",
+            "-c",
+            "0,1",
+            "node",
+            "--import",
+            "tsx",
+            "/home/yann/yann/rea-5345-lab/probe.mts"
+          ],
+          "exit_code": 0,
+          "wall_s": 0.501328217000264,
+          "cpu_s": 0.621808999999999,
+          "cpu_accounting": "payload family wait rusage delta; inherited shell child usage excluded",
+          "peak_family_rss_bytes": 125714432,
+          "sample_ms": 20,
+          "guard_stop": null
+        }
+      }
+    },
+    "oracle": {
+      "source": "ad1e17add9e9daacf0cb60c33d5bf359cf631eab",
+      "windows_cubin_hashes": 165,
+      "windows_ptx_byte_comparisons": 10,
+      "unchanged_native_kernel_facts": 3720,
+      "independently_counted_ptx_register_declarations": 248,
+      "corrected_ptx_kernel_register_totals": 20,
+      "virtual_oracle_scope": "Independent Python declaration counts from cuobjdump-extracted PTX, not physical allocation or GPU execution",
+      "linux_sm100_kernel_facts_per_mcp_task": 248,
+      "nine_producer_artifacts": "complete payload coverage",
+      "edge_workflows": "three public CLI cases completed; see review-edge-results.json"
+    },
+    "edge_inputs": [
+      {
+        "path": "/home/yann/yann/rea-5345-lab/fixtures/aliased-cubin",
+        "bytes": 861896,
+        "sha256": "dc363e8192d11dcb2d9718f1467b636ab707c10a07e5919a990d9c1db0ff40c9"
+      },
+      {
+        "path": "/home/yann/yann/rea-5345-lab/fixtures/partial-amdgpu",
+        "bytes": 608,
+        "sha256": "f403ac1c38758d4226111daaa4ec9aeb4ea03ff73fad9efe5eb2d1808093ff20"
+      },
+      {
+        "path": "/home/yann/yann/rea-5345-lab/fixtures/long-header-ptx",
+        "bytes": 71946,
+        "sha256": "567068fe43816d4ad7ec6c2de47f3536f5041da974c8fc686a518e3f10445159"
+      }
+    ],
+    "edge_results": [
+      {
+        "case": "aliased-cubin",
+        "command": [
+          "node",
+          "scripts/rea.mjs",
+          "inspect-gpu-code-objects",
+          "/home/yann/yann/rea-5345-lab/fixtures/aliased-cubin",
+          "--analysis",
+          "kernels",
+          "--detail",
+          "complete",
+          "--json"
+        ],
+        "exit_code": 0,
+        "sha256": "dc363e8192d11dcb2d9718f1467b636ab707c10a07e5919a990d9c1db0ff40c9",
+        "inspection": "complete",
+        "coverage": {
+          "discovery_scope": "supported-section-names-and-standalone-formats",
+          "discovery": "complete",
+          "payloads": "complete",
+          "examined_sections": 0,
+          "unknown_section_names": 0
+        },
+        "kernel": {
+          "name": "add_one",
+          "parameter_count": 2,
+          "parameter_bytes": 12,
+          "registers": {
+            "physical": 10,
+            "sgpr": null,
+            "vgpr": null,
+            "agpr": null,
+            "virtual": []
+          }
+        }
+      },
+      {
+        "case": "partial-amdgpu",
+        "command": [
+          "node",
+          "scripts/rea.mjs",
+          "inspect-gpu-code-objects",
+          "/home/yann/yann/rea-5345-lab/fixtures/partial-amdgpu",
+          "--analysis",
+          "kernels",
+          "--detail",
+          "complete",
+          "--json"
+        ],
+        "exit_code": 0,
+        "sha256": "f403ac1c38758d4226111daaa4ec9aeb4ea03ff73fad9efe5eb2d1808093ff20",
+        "inspection": "malformed",
+        "coverage": {
+          "discovery_scope": "supported-section-names-and-standalone-formats",
+          "discovery": "complete",
+          "payloads": "partial",
+          "examined_sections": 0,
+          "unknown_section_names": 0
+        },
+        "kernel": {
+          "name": "add_one",
+          "parameter_count": 2,
+          "parameter_bytes": 12,
+          "registers": {
+            "physical": null,
+            "sgpr": 6,
+            "vgpr": 2,
+            "agpr": null,
+            "virtual": []
+          }
+        }
+      },
+      {
+        "case": "long-header-ptx",
+        "command": [
+          "node",
+          "scripts/rea.mjs",
+          "inspect-gpu-code-objects",
+          "/home/yann/yann/rea-5345-lab/fixtures/long-header-ptx",
+          "--analysis",
+          "kernels",
+          "--detail",
+          "complete",
+          "--json"
+        ],
+        "exit_code": 0,
+        "sha256": "567068fe43816d4ad7ec6c2de47f3536f5041da974c8fc686a518e3f10445159",
+        "inspection": "complete",
+        "coverage": {
+          "discovery_scope": "supported-section-names-and-standalone-formats",
+          "discovery": "complete",
+          "payloads": "complete",
+          "examined_sections": 0,
+          "unknown_section_names": 0
+        },
+        "kernel": {
+          "name": "add_one",
+          "parameter_count": 2,
+          "parameter_bytes": 12,
+          "registers": {
+            "physical": null,
+            "sgpr": null,
+            "vgpr": null,
+            "agpr": null,
+            "virtual": [
+              {
+                "type": ".b32",
+                "count": 9
+              },
+              {
+                "type": ".b64",
+                "count": 5
+              }
+            ]
+          }
+        }
+      }
+    ],
+    "limitations": [
+      "The prior adversarial expansion is source-derived; the unsafe 67-million-entry old path was not executed.",
+      "Aliased metadata coalesces identical scoped byte declarations, preserving first source coordinates and distinct conflicting values.",
+      "Index accounting bounds serialized fact size, aggregate visits and reads; it is not a byte-accurate JS heap limit.",
+      "PTX register totals are source declarations, independently counted from cuobjdump-extracted text; physical allocation remains outside this oracle.",
+      "Main CI browser termination and wasm optional-commandTimeoutMs assertions failed identically without the GPU changes; fail-fast cancelled shards remain unverified."
+    ]
   }
 }
