@@ -68,3 +68,16 @@ it("preserves an unknown ELF machine as a fact without rejecting the header", ()
     value: { machine: 0xfffe, architecture: null },
   });
 });
+
+it("accepts NVIDIA's vendor ELF version only for the CUDA machine and OS ABI", () => {
+  const bytes = elf(2, 1, 190);
+  bytes.writeUInt32LE(0x81, 20);
+  expect(readElfFixedHeader(bytes).ok).toBe(false);
+  bytes[7] = 0x33;
+  expect(readElfFixedHeader(bytes)).toMatchObject({
+    ok: true,
+    value: { machine: 190 },
+  });
+  bytes.writeUInt16LE(62, 18);
+  expect(readElfFixedHeader(bytes).ok).toBe(false);
+});

@@ -1,3 +1,4 @@
+import { registerGpuCommands } from "./cli/gpuCommands.js";
 import { registerNativeFunctionMatchingCommands } from "./cli/nativeFunctionMatchingCommands.js";
 import { registerCaptureCommands } from "./cli/captureCommands.js";
 import { registerSignalCommands } from "./cli/signalCommands.js";
@@ -128,6 +129,7 @@ export const createCli = (
   registerGoCommands(cli, logger);
   registerIl2cppCommands(cli, logger);
   registerModelCommands(cli, logger);
+  registerGpuCommands(cli, logger);
   registerRustCommands(cli, logger);
   registerSqliteCommands(cli, logger, environment);
   registerArtifactCommands(cli, logger, analysis.runProviderAnalysis);
