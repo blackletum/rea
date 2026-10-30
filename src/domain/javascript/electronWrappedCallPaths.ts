@@ -13,6 +13,7 @@ import {
   resolveSemanticBindingState,
   semanticResolutionBlocked,
   type JavaScriptSemanticAnalysisState,
+  type JavaScriptSemanticBindingState,
 } from "./javascriptSemanticState.js";
 import { semanticIdentifierRole } from "./javascriptSemanticProjection.js";
 import type { JavaScriptElectronIdentity } from "./javascriptSemanticAnalysis.js";
@@ -138,7 +139,9 @@ const priorPath = (
 };
 
 /** One physical IPC operation, independent of how its channel was resolved. */
-const ipcSiteKey = (value: ElectronIpcFinding): string =>
+const ipcSiteKey = (
+  value: Pick<ElectronIpcFinding, "side" | "operation" | "location">,
+): string =>
   JSON.stringify([
     value.side,
     value.operation,
@@ -432,6 +435,104 @@ export function* collectElectronWrappedCallPathsSteps(
   let ipcByEndpoint: Map<string, IpcEndpointFacts> | undefined;
   // Direct operations whose channel the syntax pass left unresolved, by site.
   let unresolvedIpcSites: Map<string, number> | undefined;
+  // Traced invocation outcomes at IPC sites: the call sites of invocations
+  // that supplied a literal channel, or any other outcome.
+  const literalInvocationSites = new Map<
+    string,
+    { readonly node: t.Node; readonly calls: Set<string> }
+  >();
+  const openInvocationSites = new Set<string>();
+  // Runtime references to each binding: direct call sites, or null when any
+  // other reference can invoke it from sites the trace never seeds.
+  let directCalls:
+    | Map<JavaScriptSemanticBindingState, t.CallExpression[] | null>
+    | undefined;
+  const directCallsTo = (
+    binding: JavaScriptSemanticBindingState,
+  ): readonly t.CallExpression[] | null => {
+    if (directCalls === undefined) {
+      const references = new Map<
+        JavaScriptSemanticBindingState,
+        t.CallExpression[] | null
+      >();
+      traverseJavaScriptValueAst(program, state.erasedSyntaxNodes, {
+        enter: (node, parent, readAncestors) => {
+          if (
+            !t.isIdentifier(node) ||
+            parent === null ||
+            semanticIdentifierRole(node, parent, readAncestors) === null
+          )
+            return;
+          const referenced = resolveSemanticBindingState(
+            state,
+            node,
+            node.name,
+          );
+          if (referenced === undefined) return;
+          const calls = references.get(referenced);
+          if (calls === null) return;
+          if (t.isCallExpression(parent) && parent.callee === node)
+            references.set(referenced, [...(calls ?? []), parent]);
+          else references.set(referenced, null);
+        },
+      });
+      directCalls = references;
+    }
+    return directCalls.get(binding) ?? [];
+  };
+  /**
+   * Whether every invocation of the function enclosing a node is a direct call
+   * whose own invocation chain the trace followed. Seeds start only at literal
+   * arguments, so an untraced call site may supply any channel.
+   */
+  const tracedInvocationsOnly = (
+    node: t.Node,
+    traced: ReadonlySet<string>,
+    active: ReadonlySet<t.Node> = new Set(),
+  ): boolean => {
+    let fn = state.parentsByNode.get(node);
+    while (fn !== undefined && !t.isFunction(fn))
+      fn = state.parentsByNode.get(fn);
+    // Top-level code runs once with the values the trace evaluated.
+    if (fn === undefined) return true;
+    if (active.has(fn)) return false;
+    const declarator = state.parentsByNode.get(fn);
+    const declaration = t.isFunctionDeclaration(fn)
+      ? fn
+      : t.isVariableDeclarator(declarator) && declarator.init === fn
+        ? state.parentsByNode.get(declarator)
+        : undefined;
+    const owner =
+      declaration === undefined
+        ? undefined
+        : state.parentsByNode.get(declaration);
+    // An exported declaration is invoked by importers this file never sees.
+    if (
+      declaration === undefined ||
+      t.isExportNamedDeclaration(owner) ||
+      t.isExportDefaultDeclaration(owner)
+    )
+      return false;
+    const id = t.isFunctionDeclaration(fn)
+      ? fn.id
+      : t.isVariableDeclarator(declarator) && t.isIdentifier(declarator.id)
+        ? declarator.id
+        : undefined;
+    const binding =
+      id === undefined || id === null
+        ? undefined
+        : resolveSemanticBindingState(state, id, id.name);
+    const calls = binding === undefined ? null : directCallsTo(binding);
+    return (
+      calls !== null &&
+      calls.length > 0 &&
+      calls.every(
+        (call) =>
+          traced.has(ipcInvocationKey(range(call))) &&
+          tracedInvocationsOnly(call, traced, new Set([...active, fn])),
+      )
+    );
+  };
   const ipcAtEndpoint = (): Map<string, IpcEndpointFacts> => {
     if (ipcByEndpoint !== undefined) return ipcByEndpoint;
     ipcByEndpoint = new Map();
@@ -825,18 +926,26 @@ export function* collectElectronWrappedCallPathsSteps(
     endpoint: string,
     guardedDispatch: boolean,
   ): void => {
+    const location = range(node);
+    // The site evaluated in its own scope is not an invocation of it.
+    const invocationSite =
+      context.calls.length > 0
+        ? ipcSiteKey({ ...descriptor, location })
+        : undefined;
+    const open = (): void => {
+      if (invocationSite !== undefined) openInvocationSites.add(invocationSite);
+    };
     const first = args[0];
     if (first?.kind !== "literal" || typeof first.value !== "string") {
       accumulator.unknownFindings += 1;
-      return;
+      return open();
     }
     const channelContext = metadataContext(context, first);
-    if (!channelContext) return;
+    if (!channelContext) return open();
     const handlerValue = args[1] ?? symbolicUnknown("missing handler");
     const handlerContext = metadataContext(channelContext, handlerValue);
-    if (!handlerContext) return;
+    if (!handlerContext) return open();
     const channel = first.value;
-    const location = range(node);
     const invocationLocation =
       javascriptSourceRangeKey(range(context.entryNode)) ===
       javascriptSourceRangeKey(location)
@@ -936,6 +1045,17 @@ export function* collectElectronWrappedCallPathsSteps(
         : undefined;
     if (!findingGuarded && registrationKey !== undefined)
       unconditionalRegistrations.add(registrationKey);
+    // A guarded invocation still supplies this literal; its predicate is kept
+    // on the call path, so the site's channel values remain enumerated.
+    if (invocationSite !== undefined) {
+      const traced = literalInvocationSites.get(invocationSite);
+      if (traced === undefined)
+        literalInvocationSites.set(invocationSite, {
+          node,
+          calls: new Set(context.calls),
+        });
+      else for (const call of context.calls) traced.calls.add(call);
+    }
     if (!duplicate && !findingGuarded) {
       const value: ElectronIpcFinding = {
         ...finding,
@@ -1435,7 +1555,24 @@ export function* collectElectronWrappedCallPathsSteps(
   if (remainingVisits < 0 || resolver.truncated) {
     accumulator.unknownFindings += 1;
     accumulator.electronCallPathLimitReached = true;
-  }
+  } else
+    // A dynamic site's channels are enumerated only when the complete trace
+    // reached it with literal channels, no other invocation outcome, and no
+    // way to invoke its wrapper from sites the trace does not seed.
+    for (const [site, index] of unresolvedIpcSites ?? []) {
+      const entry = accumulator.ipc[index];
+      const traced = literalInvocationSites.get(site);
+      if (
+        entry?.value.channel === null &&
+        traced !== undefined &&
+        !openInvocationSites.has(site) &&
+        tracedInvocationsOnly(traced.node, traced.calls)
+      )
+        accumulator.ipc[index] = {
+          ...entry,
+          value: { ...entry.value, invocation_channels: "literal" },
+        };
+    }
   if (resolver.unresolved) accumulator.unknownFindings += 1;
   return paths;
 }

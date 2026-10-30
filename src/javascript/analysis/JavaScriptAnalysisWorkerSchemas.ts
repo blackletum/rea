@@ -91,6 +91,7 @@ const ipcChannel = <Shape extends z.ZodRawShape>(shape: Shape) =>
       receiver: ipcReceiver,
       invocation_location: range.optional(),
       resolution_basis: z.literal("wrapper-substitution").optional(),
+      invocation_channels: z.literal("literal").exactOptional(),
       ...shape,
       channel: z.null(),
       channel_expression: z.string(),
