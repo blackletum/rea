@@ -648,7 +648,9 @@ IPC pairing is an inference, not an observation. A main handler registered on an
 unresolved channel may receive any literal channel, so a compatible renderer send
 or `invoke` beside it is ambiguous, not unpaired. A wrapper's registration is
 exempt only when every invocation is a traced direct call supplying a literal
-channel, each recorded as its own finding. A renderer `invoke` pairs only
+channel, each recorded as its own finding. A guarded invocation keeps its
+predicate on a call path instead, so its channel still competes without pairing.
+A renderer `invoke` pairs only
 with one unique `ipcMain.handle`/`handleOnce` candidate on the same exact literal
 channel; a renderer send pairs only with one unique `ipcMain.on`/`once`/`addListener`
 candidate. Dynamic channels are never paired, and multiple compatible handlers

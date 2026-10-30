@@ -147,6 +147,12 @@ export type ElectronIpcFinding = ElectronIpcDescriptor &
          * guarded call path. Absent when any invocation may supply another value.
          */
         readonly invocation_channels?: "literal";
+        /**
+         * Channels from guarded invocations, which keep their predicate on a
+         * call path instead of becoming findings. Each still competes for its
+         * channel in pairing.
+         */
+        readonly guarded_invocation_channels?: readonly string[];
       }
   );
 

@@ -39,13 +39,31 @@ module.exports = register;`,
     pairing: { paired: 0, ambiguous: 1, unpaired: 1 },
   },
   {
-    // Every call site supplies a literal, so each channel is already a finding.
+    // Every call site supplies a literal; the guarded one competes only for
+    // its own channel, so app:log still pairs with its finding.
     shape: "a wrapper whose call sites are all literal",
     main: `function register(channel, handler) { ipcMain.on(channel, handler); }
 register("app:log", () => {});
 if (process.env.EXTRA) register("other", () => {});`,
     preload: sends,
     pairing: { paired: 1, ambiguous: 0, unpaired: 1 },
+  },
+  {
+    // A guarded registration has no IPC finding, yet it may receive app:log.
+    shape: "a guarded wrapper registration",
+    main: `function register(channel, handler) { ipcMain.on(channel, handler); }
+if (process.env.EXTRA) register("app:log", () => {});`,
+    preload: sends,
+    pairing: { paired: 0, ambiguous: 1, unpaired: 1 },
+  },
+  {
+    // The guarded registration competes with the direct handler on app:log.
+    shape: "a guarded wrapper registration and a direct handler",
+    main: `function register(channel, handler) { ipcMain.on(channel, handler); }
+if (process.env.EXTRA) register("app:log", () => {});
+ipcMain.on("app:log", () => {});`,
+    preload: sends,
+    pairing: { paired: 0, ambiguous: 1, unpaired: 1 },
   },
   {
     // A renderer listener and a main-to-renderer send receive no renderer sends.

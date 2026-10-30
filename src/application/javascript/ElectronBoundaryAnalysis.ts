@@ -68,13 +68,14 @@ export const createElectronIpcContext = (
     .filter(isPairableRendererTransmission)
     .map((transmission) => {
       const owner = owners.get(transmission.key);
+      const channel = transmission.finding.channel;
       const matching =
-        transmission.finding.channel === null
+        channel === null
           ? []
           : handlers.filter(
               (handler) =>
-                (handler.finding.channel === transmission.finding.channel ||
-                  mayReceiveAnyChannel(handler)) &&
+                (handler.finding.channel === channel ||
+                  mayReceiveChannel(handler, channel)) &&
                 compatibleIpcModes(transmission.finding, handler.finding),
             );
       const candidates = matching.filter(
@@ -242,11 +243,17 @@ const isPairableRendererTransmission = (record: ElectronIpcRecord): boolean =>
 /**
  * An unresolved channel may receive any literal channel, so it competes without
  * ever pairing. A wrapper site whose invocations all supplied literal channels
- * is already represented by the findings for those invocations.
+ * is represented by their findings, except guarded invocations, which have none
+ * and still compete for their own channels.
  */
-const mayReceiveAnyChannel = ({ finding }: ElectronIpcRecord): boolean =>
+const mayReceiveChannel = (
+  { finding }: ElectronIpcRecord,
+  channel: string,
+): boolean =>
   finding.channel === null &&
-  (finding.receiver !== undefined || finding.invocation_channels !== "literal");
+  (finding.receiver !== undefined ||
+    finding.invocation_channels !== "literal" ||
+    finding.guarded_invocation_channels?.includes(channel) === true);
 
 /** Only an ipcMain registration on the same literal channel can be paired. */
 const isExactIpcHandler = (handler: ElectronIpcRecord | undefined): boolean =>

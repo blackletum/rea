@@ -439,7 +439,12 @@ export function* collectElectronWrappedCallPathsSteps(
   // that supplied a literal channel, or any other outcome.
   const literalInvocationSites = new Map<
     string,
-    { readonly node: t.Node; readonly calls: Set<string> }
+    {
+      readonly node: t.Node;
+      readonly calls: Set<string>;
+      // Literals whose guarded registration has no IPC finding of its own.
+      readonly guardedChannels: Set<string>;
+    }
   >();
   const openInvocationSites = new Set<string>();
   // Runtime references to each binding: direct call sites, or null when any
@@ -471,9 +476,10 @@ export function* collectElectronWrappedCallPathsSteps(
           if (referenced === undefined) return;
           const calls = references.get(referenced);
           if (calls === null) return;
-          if (t.isCallExpression(parent) && parent.callee === node)
-            references.set(referenced, [...(calls ?? []), parent]);
-          else references.set(referenced, null);
+          if (!t.isCallExpression(parent) || parent.callee !== node)
+            references.set(referenced, null);
+          else if (calls === undefined) references.set(referenced, [parent]);
+          else calls.push(parent);
         },
       });
       directCalls = references;
@@ -1045,16 +1051,20 @@ export function* collectElectronWrappedCallPathsSteps(
         : undefined;
     if (!findingGuarded && registrationKey !== undefined)
       unconditionalRegistrations.add(registrationKey);
-    // A guarded invocation still supplies this literal; its predicate is kept
-    // on the call path, so the site's channel values remain enumerated.
+    // A guarded registration keeps its predicate on the call path instead of
+    // becoming an IPC finding, so the site carries its channel to pairing.
+    const guardedOnly =
+      findingGuarded &&
+      (registrationKey === undefined ||
+        !unconditionalRegistrations.has(registrationKey));
     if (invocationSite !== undefined) {
-      const traced = literalInvocationSites.get(invocationSite);
-      if (traced === undefined)
-        literalInvocationSites.set(invocationSite, {
-          node,
-          calls: new Set(context.calls),
-        });
-      else for (const call of context.calls) traced.calls.add(call);
+      let traced = literalInvocationSites.get(invocationSite);
+      if (traced === undefined) {
+        traced = { node, calls: new Set(), guardedChannels: new Set() };
+        literalInvocationSites.set(invocationSite, traced);
+      }
+      for (const call of context.calls) traced.calls.add(call);
+      if (guardedOnly) traced.guardedChannels.add(channel);
     }
     if (!duplicate && !findingGuarded) {
       const value: ElectronIpcFinding = {
@@ -1106,11 +1116,7 @@ export function* collectElectronWrappedCallPathsSteps(
         if (descriptor.mode !== "send" && descriptor.mode !== "invoke" && !fn)
           accumulator.unknownFindings += 1;
       }
-    } else if (
-      findingGuarded &&
-      (registrationKey === undefined ||
-        !unconditionalRegistrations.has(registrationKey))
-    ) {
+    } else if (guardedOnly) {
       accumulator.unknownFindings += 1;
       // A guarded registration is a path candidate even when its callback has
       // no observable body. Keep its predicate instead of promoting it to an
@@ -1570,7 +1576,17 @@ export function* collectElectronWrappedCallPathsSteps(
       )
         accumulator.ipc[index] = {
           ...entry,
-          value: { ...entry.value, invocation_channels: "literal" },
+          value: {
+            ...entry.value,
+            invocation_channels: "literal",
+            ...(traced.guardedChannels.size === 0
+              ? {}
+              : {
+                  guarded_invocation_channels: [...traced.guardedChannels].sort(
+                    compareUnicodeCodePoints,
+                  ),
+                }),
+          },
         };
     }
   if (resolver.unresolved) accumulator.unknownFindings += 1;
