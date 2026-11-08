@@ -3,13 +3,16 @@ import { STDIO_DEFAULT_MAX_BUFFER_SIZE } from "@modelcontextprotocol/server";
 
 import type { ToolContract } from "../contracts/toolContractTypes.js";
 import type { EvidenceWriter } from "../application/investigation/InvestigationRecordPort.js";
+import type { BinaryOpenResult } from "../application/binary/BinarySessionPort.js";
 import type { Evidence } from "../domain/evidence.js";
 import { safeParseEvidence } from "../domain/evidenceValidation.js";
 import {
+  omitUnretainedEvidenceFromError,
   projectAnalysisError,
   type AnalysisErrorProjection,
 } from "../domain/analysisErrorProjection.js";
 import type { AnalysisError } from "../domain/analysisErrorBase.js";
+import { NoBinaryOpenError } from "../domain/configurationErrors.js";
 import { jsonValueSchema, type JsonValue } from "../domain/jsonValue.js";
 import type { Result } from "../domain/result.js";
 import { AnalysisResourceConstraintError } from "../domain/analysisErrorCore.js";
@@ -25,9 +28,11 @@ import {
 } from "../config/mcpResponseBudget.js";
 import {
   encodeToolResult,
+  measureMcpResultWithinBudget,
   MCP_RESULT_STRING_LIMIT,
   NODE_MAX_STRING_LENGTH,
   TARGET_CONTENT_RESULT_META,
+  type ToolResultEncoding,
 } from "./toolResultEncoding.js";
 
 /** Project a response-budget refusal without labeling REA's reserved string limit as Node's ceiling. */
@@ -104,10 +109,20 @@ export class ToolResultDelivery {
       selected?: JsonValue,
       viewSource?: JsonValue,
     ) => Readonly<Record<string, JsonValue>> = () => ({}),
+    private readonly noTargetRecovery?: string,
   ) {
     this.maximumResponseBytes = maximumResponseBytes;
     this.resultBudgetBytes = maximumResponseBytes - 1024;
     Object.freeze(this);
+  }
+
+  /** Bind scope-specific recovery without mutating a shared delivery policy. */
+  withNoTargetRecovery(recovery: string): ToolResultDelivery {
+    return new ToolResultDelivery(
+      this.maximumResponseBytes,
+      this.nativeContinuation,
+      recovery,
+    );
   }
 
   /** Serialize a plain application result or its actionable error. */
@@ -115,14 +130,68 @@ export class ToolResultDelivery {
     result: Result<JsonValue, AnalysisError>,
     contract: ToolContract,
     recovery: Readonly<Record<string, JsonValue>> = {},
+    alternatives?: (
+      failure: Extract<ToolResultEncoding, { readonly ok: false }>,
+      budgetBytes: number,
+    ) => Iterable<JsonValue>,
   ): CallToolResult {
     return result.ok
       ? this.successResult(
           contract.kind === "session" ? { result: result.value } : result.value,
           contract,
           recovery,
+          alternatives,
         )
       : this.toErrorToolResult(result.error, contract.returnsTargetContent);
+  }
+
+  /**
+   * A plain result followed by the content blocks a forwarded tool returned,
+   * such as a computer's screenshot, unchanged. When the whole response does
+   * not fit the budget, the error keeps the tool's own result, whose ids name
+   * what it started, and says how to ask for a smaller image.
+   */
+  toForwardedToolResult(
+    result: Result<JsonValue, AnalysisError>,
+    contract: ToolContract,
+    forwarded: readonly Readonly<Record<string, JsonValue>>[],
+  ): CallToolResult {
+    const delivered = this.toCallToolResult(result, contract);
+    if (delivered.isError === true || forwarded.length === 0) return delivered;
+    // The blocks are the upstream MCP result's own, validated by its client.
+    const content = [
+      ...delivered.content,
+      ...(forwarded as CallToolResult["content"]),
+    ];
+    const combined = { ...delivered, content };
+    const measured = measureMcpResultWithinBudget(
+      combined,
+      this.resultBudgetBytes,
+    );
+    if (measured.ok) return combined;
+    const projected = mcpResponseOverflowProjection({
+      completed: true,
+      constraint: "receive-buffer",
+      effectiveResponseBytes: this.maximumResponseBytes,
+      nextStep:
+        "The tool's own result, without the forwarded content, is details.result; use its ids, and ask for a smaller image: a screenshot region, or format jpeg with a lower quality.",
+    });
+    return this.toErrorToolResult(
+      new AnalysisResourceConstraintError(
+        contract.name,
+        "transport",
+        projected.reason,
+        {
+          boundary: "mcp-response",
+          result_budget_bytes: this.resultBudgetBytes,
+          response_bytes_at_least: measured.bytesAtLeast,
+          constraint: measured.constraint,
+        },
+        { remediationAction: projected.remediationAction },
+      ),
+      contract.returnsTargetContent,
+      { result: result.ok ? result.value : null },
+    );
   }
 
   /** Deliver Evidence using the producer's explicit recording acknowledgment. */
@@ -183,9 +252,44 @@ export class ToolResultDelivery {
   toErrorToolResult(
     error: AnalysisError,
     targetContent: boolean,
+    details?: Readonly<Record<string, JsonValue>>,
   ): CallToolResult {
+    const base = projectAnalysisError(error);
+    const projected =
+      details === undefined
+        ? base
+        : { ...base, details: { ...base.details, ...details } };
+    if (
+      error instanceof NoBinaryOpenError &&
+      this.noTargetRecovery !== undefined
+    )
+      return this.projectedErrorResult(
+        {
+          ...projected,
+          message: this.noTargetRecovery,
+          remediation: { action: this.noTargetRecovery },
+        },
+        targetContent,
+      );
+    return this.projectedErrorResult(projected, targetContent);
+  }
+
+  /** Include the session owner's selection at the end of this open attempt. */
+  toOpenFailureToolResult(
+    failure: Extract<BinaryOpenResult, { ok: false }>,
+    targetContent: boolean,
+  ): CallToolResult {
+    const projected = projectAnalysisError(failure.error);
     return this.projectedErrorResult(
-      projectAnalysisError(error),
+      {
+        ...projected,
+        details: {
+          ...projected.details,
+          selection_at_failure: failure.selection,
+          target_at_open_completion: failure.targetAtCompletion,
+          provider_id_at_open_completion: failure.providerIdAtCompletion,
+        },
+      },
       targetContent,
     );
   }
@@ -222,15 +326,31 @@ export class ToolResultDelivery {
     projected: AnalysisErrorProjection,
     targetContent: boolean,
   ): CallToolResult {
-    const structuredContent = { error: projected };
+    let structuredContent = { error: projected };
     // Errors reach the wire as text only; the structured copy is a private
     // carrier the transport removes after its own budget check.
-    const encoded = encodeToolResult(
+    let encoded = encodeToolResult(
       structuredContent,
       this.resultBudgetBytes,
       "error-text",
       targetContent,
     );
+    if (!encoded.ok) {
+      const compact = omitUnretainedEvidenceFromError(projected, encoded);
+      if (compact !== undefined) {
+        const compactContent = { error: compact };
+        const compactEncoded = encodeToolResult(
+          compactContent,
+          this.resultBudgetBytes,
+          "error-text",
+          targetContent,
+        );
+        if (compactEncoded.ok) {
+          structuredContent = compactContent;
+          encoded = compactEncoded;
+        }
+      }
+    }
     // The transport retains an oversized projected error before replacing it
     // with a recoverable delivery constraint, using this same budget.
     return {
@@ -245,13 +365,31 @@ export class ToolResultDelivery {
     value: JsonValue,
     contract: ToolContract,
     recovery: Readonly<Record<string, JsonValue>> = {},
+    alternatives?: (
+      failure: Extract<ToolResultEncoding, { readonly ok: false }>,
+      budgetBytes: number,
+    ) => Iterable<JsonValue>,
   ): CallToolResult {
-    const encoded = encodeToolResult(
+    let encoded = encodeToolResult(
       value,
       this.resultBudgetBytes,
       "structured-and-text",
       contract.returnsTargetContent,
     );
+    if (!encoded.ok && alternatives !== undefined)
+      for (const candidate of alternatives(encoded, this.resultBudgetBytes)) {
+        const candidateEncoding = encodeToolResult(
+          candidate,
+          this.resultBudgetBytes,
+          "structured-and-text",
+          contract.returnsTargetContent,
+        );
+        if (candidateEncoding.ok) {
+          value = candidate;
+          encoded = candidateEncoding;
+          break;
+        }
+      }
     if (encoded.ok)
       return {
         content: [{ type: "text", text: encoded.text }],
@@ -272,7 +410,9 @@ export class ToolResultDelivery {
               ? "Call list_unknowns on this same connection with the same filters and offset, using a smaller limit, then follow next_offset. If a single unknown cannot fit, export the session with export_evidence_bundle to recover it."
               : contract.name === "get_evidence_bundle"
                 ? evidenceBundleOverflowStep(value)
-                : "Use complete CLI JSON output to consume the analysis.";
+                : contract.name === "inspect_address_context"
+                  ? "Call get_evidence_bundle with detail summary to discover retained facet observations, then export_evidence_bundle to inspect complete records. Some facets may not have been retained; a new analysis can differ."
+                  : "Use complete CLI JSON output to consume the analysis.";
     const projected = mcpResponseOverflowProjection({
       completed: true,
       constraint: encoded.constraint,

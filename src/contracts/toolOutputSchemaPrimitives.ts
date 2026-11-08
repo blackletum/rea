@@ -65,6 +65,7 @@ const providerCapabilityFacts = {
     requires_root: z.boolean(),
   }),
   limitations: z.array(z.string()),
+  independent_decompile: z.literal(true).exactOptional(),
 };
 
 export const providerCapability = z.discriminatedUnion("available", [
@@ -80,6 +81,7 @@ export const providerCapability = z.discriminatedUnion("available", [
     reason: z.string().nullable(),
     availability_code: z.enum(PROVIDER_REJECTION_CODES).nullable(),
     remediation: providerRemediation.exactOptional(),
+    runtime_unavailable: z.literal(true).exactOptional(),
   }),
 ]);
 export type ProviderCapability = z.output<typeof providerCapability>;
@@ -99,6 +101,7 @@ const providerCapabilityGroupFacts = {
   operations: z.array(z.string().min(1)).min(1),
   effects: z.array(providerCapabilityFacts.effects.keyof()),
   limitations: z.array(z.string()),
+  independent_decompile: providerCapabilityFacts.independent_decompile,
 };
 
 const providerCapabilityGroup = z.discriminatedUnion("available", [
@@ -114,6 +117,7 @@ const providerCapabilityGroup = z.discriminatedUnion("available", [
     reason: z.string().nullable(),
     availability_code: z.enum(PROVIDER_REJECTION_CODES).nullable(),
     remediation: providerRemediation.exactOptional(),
+    runtime_unavailable: z.literal(true).exactOptional(),
   }),
 ]);
 
@@ -136,11 +140,18 @@ export const expandProviderCapabilities = (
       group.operations.map((operation) => ({
         ...providerCapability.parse({
           operation,
+          ...(group.independent_decompile === undefined
+            ? {}
+            : { independent_decompile: group.independent_decompile }),
           available: group.available,
           reason: group.reason,
           availability_code: group.availability_code,
           ...("remediation" in group && group.remediation !== undefined
             ? { remediation: group.remediation }
+            : {}),
+          ...("runtime_unavailable" in group &&
+          group.runtime_unavailable === true
+            ? { runtime_unavailable: true }
             : {}),
           effects: Object.fromEntries(
             PROVIDER_EFFECT_NAMES.map((name) => [

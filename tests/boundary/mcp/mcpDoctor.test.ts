@@ -1,8 +1,12 @@
 import { contractsForToolFamilies } from "../../../src/contracts/toolFamilies.js";
+import {
+  HOT_TOOL_NAMES,
+  progressiveCatalogIdentity,
+} from "../../../src/catalogDiscovery.js";
 import { Client } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
-import { execFile } from "node:child_process";
-import { readFile, writeFile } from "node:fs/promises";
+import { execFile, spawn } from "node:child_process";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 
@@ -19,6 +23,7 @@ import {
   runProductionMcpDoctorCli,
 } from "../../../src/mcpDoctor.js";
 import {
+  DEFAULT_CATALOG_IDENTITY,
   FULL_CATALOG_IDENTITY,
   catalogIdentityForToolFamilies,
   createCatalogIdentity,
@@ -49,6 +54,42 @@ const expectDoctorDeadline = (
     ),
   );
 };
+
+const captureProductionCli = async (
+  arguments_: readonly string[],
+  environment: NodeJS.ProcessEnv,
+) =>
+  new Promise<{
+    readonly exitCode: number | null;
+    readonly stdout: string;
+    readonly stderr: string;
+  }>((finish, reject) => {
+    const child = spawn(
+      process.execPath,
+      [resolve("scripts/rea.mjs"), ...arguments_],
+      {
+        cwd: process.cwd(),
+        env: environment,
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => {
+      stdout += String(chunk);
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += String(chunk);
+    });
+    const timeout = setTimeout(() => child.kill("SIGTERM"), 15_000);
+    child.once("error", reject);
+    child.once("close", (exitCode) => {
+      clearTimeout(timeout);
+      finish({ exitCode, stdout, stderr });
+    });
+  });
 
 afterEach(() => vi.useRealTimers());
 
@@ -158,6 +199,33 @@ const catalogProfiles = [
     }),
   },
 ];
+
+it("recognizes a hot/cold initial catalog and its inventory identity", async () => {
+  const result = await runProductionMcpDoctor({
+    command: process.execPath,
+    args: [resolve("scripts/rea.mjs"), "mcp"],
+    cwd: process.cwd(),
+    environment: { ...process.env, REA_MCP_TOOL_CATALOG_PROFILE: "hot-cold" },
+  });
+  expect(result.healthy).toBe(true);
+  expect(result.inventory?.tools).toMatchObject({
+    expected: HOT_TOOL_NAMES.size + 1,
+    observed: HOT_TOOL_NAMES.size + 1,
+    missing: [],
+    unexpected: [],
+  });
+  expect(result.identity?.observed_catalog_digest).toBe(
+    progressiveCatalogIdentity(DEFAULT_CATALOG_IDENTITY).digests
+      .combined_sha256,
+  );
+  const environment = {
+    ...process.env,
+    REA_MCP_TOOL_CATALOG_PROFILE: "hot-cold",
+  };
+  const identity = progressiveCatalogIdentity(DEFAULT_CATALOG_IDENTITY);
+  await assertStatusCatalogIdentity(environment, identity);
+  await assertCliCatalogIdentity(environment, identity);
+});
 
 describe("production MCP doctor", () => {
   it("reuses immutable compiled profile digests and preserves custom-budget identity", async () => {
@@ -358,6 +426,70 @@ describe("production MCP doctor family scopes", () => {
 });
 
 describe("production MCP doctor output", () => {
+  it("keeps both structured stdout formats parseable when prompts are not advertised", async () => {
+    const root = await createTestTempDirectory("rea-mcp-doctor-output-");
+    const directories = {
+      home: join(root, "home"),
+      config: join(root, "config"),
+      data: join(root, "data"),
+      cache: join(root, "cache"),
+      state: join(root, "state"),
+      temp: join(root, "temp"),
+    };
+    await Promise.all(
+      Object.values(directories).map((path) =>
+        mkdir(path, { recursive: true }),
+      ),
+    );
+    const environment = {
+      ...process.env,
+      REA_MCP_TOOL_FAMILIES: "browser",
+      HOME: directories.home,
+      XDG_CONFIG_HOME: directories.config,
+      XDG_DATA_HOME: directories.data,
+      XDG_CACHE_HOME: directories.cache,
+      XDG_STATE_HOME: directories.state,
+      TMPDIR: directories.temp,
+    };
+
+    const json = await captureProductionCli(
+      ["mcp", "doctor", "--json"],
+      environment,
+    );
+    const jsonl = await captureProductionCli(
+      ["mcp", "doctor", "--format", "jsonl"],
+      environment,
+    );
+
+    expect([json.exitCode, jsonl.exitCode]).toEqual([1, 1]);
+    const parseable = [json.stdout, jsonl.stdout].map((output) => {
+      try {
+        JSON.parse(output);
+        return true;
+      } catch {
+        return false;
+      }
+    });
+    expect(parseable).toEqual([true, true]);
+    expect(JSON.parse(json.stdout)).toMatchObject({
+      healthy: false,
+      inventory: {
+        prompts: { expected: 0, observed: 0, missing: [], unexpected: [] },
+      },
+    });
+    expect(JSON.parse(jsonl.stdout)).toMatchObject({
+      $rea: "jsonl/v1",
+      type: "error",
+      ok: false,
+      result: {
+        healthy: false,
+        inventory: {
+          prompts: { expected: 0, observed: 0, missing: [], unexpected: [] },
+        },
+      },
+    });
+  }, 35_000);
+
   it.each([false, true])(
     "frames unhealthy JSONL diagnostics and retains the selected envelope (%s)",
     async (full) => {
@@ -524,8 +656,7 @@ describe("production MCP doctor child lifecycle", () => {
       command: process.execPath,
       args: [resolve("tests/fixtures/mcpDoctorExit.mjs")],
       cwd: process.cwd(),
-      environment: process.env,
-      deadlineMs: 2_000,
+      environment: { ...process.env, REA_MCP_DOCTOR_DEADLINE_MS: "2000" },
     });
     expect(result).toMatchObject({
       healthy: false,
@@ -594,7 +725,7 @@ describe("production MCP doctor child lifecycle", () => {
     });
   });
 
-  it("kills a child that misses the absolute startup deadline", async () => {
+  it("applies the configured startup deadline and kills the child", async () => {
     const root = await createTestTempDirectory("rea-mcp-doctor-");
     const pidPath = join(root, "pid");
     // Keep filesystem/process I/O real. Advance only the deadline timers,
@@ -604,8 +735,11 @@ describe("production MCP doctor child lifecycle", () => {
       command: process.execPath,
       args: [resolve("tests/fixtures/mcpDoctorHang.mjs")],
       cwd: process.cwd(),
-      environment: { ...process.env, REA_MCP_DOCTOR_PID_PATH: pidPath },
-      deadlineMs: 60_000,
+      environment: {
+        ...process.env,
+        REA_MCP_DOCTOR_PID_PATH: pidPath,
+        REA_MCP_DOCTOR_DEADLINE_MS: "60000",
+      },
     });
     const pid = await vi.waitFor(
       async () => {
@@ -638,8 +772,8 @@ describe("production MCP doctor request-flow deadline", () => {
         ...process.env,
         REA_MCP_PROBE_MODE: "hang-on-call",
         REA_MCP_PROBE_READY_PATH: readyPath,
+        REA_MCP_DOCTOR_DEADLINE_MS: "60000",
       },
-      deadlineMs: 60_000,
     });
     await vi.waitFor(
       async () => {
@@ -675,8 +809,8 @@ describe("production MCP doctor request-flow deadline", () => {
           ...process.env,
           REA_MCP_PROBE_MODE: "refuse-call",
           REA_MCP_PROBE_ERROR_MESSAGE: message,
+          REA_MCP_DOCTOR_DEADLINE_MS: "5000",
         },
-        deadlineMs: 5_000,
       });
       expect(result.server).not.toBeNull();
       const requestFlow = result.checks.find(
@@ -688,36 +822,6 @@ describe("production MCP doctor request-flow deadline", () => {
     },
     10_000,
   );
-
-  it("uses REA_MCP_DOCTOR_DEADLINE_MS when no caller deadline is passed", async () => {
-    const root = await createTestTempDirectory("rea-mcp-doctor-setting-");
-    const pidPath = join(root, "pid");
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    const pending = runProductionMcpDoctor({
-      command: process.execPath,
-      args: [resolve("tests/fixtures/mcpDoctorHang.mjs")],
-      cwd: process.cwd(),
-      environment: {
-        ...process.env,
-        REA_MCP_DOCTOR_PID_PATH: pidPath,
-        REA_MCP_DOCTOR_DEADLINE_MS: "2000",
-      },
-    });
-    const pid = await vi.waitFor(
-      async () => {
-        const value = Number.parseInt(await readFile(pidPath, "utf8"), 10);
-        expect(Number.isSafeInteger(value) && value > 0).toBe(true);
-        return value;
-      },
-      { timeout: 10_000 },
-    );
-    await vi.advanceTimersByTimeAsync(2_000);
-    const result = await vi.waitFor(() => pending, { timeout: 10_000 });
-    vi.useRealTimers();
-    expect(result.healthy).toBe(false);
-    expectDoctorDeadline(result.checks[0]?.detail, 2_000);
-    await expect(waitForExit(pid)).resolves.toBeUndefined();
-  }, 10_000);
 
   it("refuses an invalid phase budget before starting a child", async () => {
     const result = await runProductionMcpDoctor({
@@ -752,8 +856,7 @@ const runNoisyDoctorChild = async (body: string) => {
     command: process.execPath,
     args: [scriptPath],
     cwd: root,
-    environment: process.env,
-    deadlineMs: 5_000,
+    environment: { ...process.env, REA_MCP_DOCTOR_DEADLINE_MS: "5000" },
   });
 };
 

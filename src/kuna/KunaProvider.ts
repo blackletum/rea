@@ -272,8 +272,14 @@ export class KunaProvider implements AnalysisProviderCandidate {
             schema_version: 4,
             bodies: false,
             edge_kind: "call",
+            discovery: "body-classification-v1",
           },
-          xrefs: { command: "xrefs", direction: "to", exact_address: true },
+          xrefs: {
+            command: "xrefs",
+            direction: "to",
+            exact_address: true,
+            stored_pointers: true,
+          },
           strings: {
             command: "strings",
             encoding: "all",
@@ -281,6 +287,7 @@ export class KunaProvider implements AnalysisProviderCandidate {
             termination: "any",
             xrefs: false,
           },
+          value_flow: "explicitly-unavailable-v1",
           cache_policy: "live",
         },
       ),
