@@ -11,6 +11,7 @@ import {
   recordValue,
   type UnknownRecord,
 } from "./CdpCaptureValues.js";
+import { cdpResourceColumnSchema } from "../domain/cdpObservationSchemas.js";
 
 const integer = z.int().min(0);
 /** Active runtime admission remains stricter than passive request observations. */
@@ -25,7 +26,7 @@ export const runtimeRequestSchema = z.object({
       stack: z.unknown().optional(),
       url: z.string().optional(),
       lineNumber: integer.optional(),
-      columnNumber: integer.optional(),
+      columnNumber: cdpResourceColumnSchema.optional(),
     })
     .passthrough(),
 });
@@ -42,7 +43,7 @@ export interface CdpResponseFacts {
   readonly encodedDataLength: number | undefined;
   readonly headers: unknown;
 }
-export const readCdpResponseFacts = (
+const readCdpResponseFacts = (
   reported: unknown,
 ): CdpResponseFacts | undefined => {
   const source = recordValue(reported);

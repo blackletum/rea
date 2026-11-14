@@ -7,6 +7,7 @@ import {
   MachoLoadCommandCursor,
   readMachoHeaderDeclarations,
   readMachoCommandStringBytes,
+  readMachoLinkeditDataCommand,
   type MachoCommandStringFailure,
 } from "../../domain/apple/machoLoadCommands.js";
 import {
@@ -18,10 +19,7 @@ import type {
   MachoImageFacts,
   MachoSlice,
 } from "../../domain/apple/dylibResolution.js";
-import {
-  machoArchitectureName,
-  machoCpuSubtypeBase,
-} from "../../domain/apple/machoCpuIdentity.js";
+import { machoArchitectureName } from "../../domain/apple/machoCpuIdentity.js";
 import {
   legacyMachoPlatform,
   type MachoVersionMinPlatform,
@@ -51,13 +49,13 @@ export const MAX_LOAD_COMMAND_BYTES = 16 * 1024 * 1024;
  * byte cap alone would retain about a million dependency results. Stop before
  * those results are kept or traced.
  */
-export const MAX_LAZY_INFO_DEPENDENCIES = 1024;
+const MAX_LAZY_INFO_DEPENDENCIES = 1024;
 /**
  * Symbol names are validated and then discarded. Distinct one-byte strings
  * stay under the 16 MiB byte budgets while retaining one cache entry per
  * offset, so stop before that map and those decodes grow.
  */
-export const MAX_LAZY_INFO_SYMBOL_REFERENCES = 64 * 1024;
+const MAX_LAZY_INFO_SYMBOL_REFERENCES = 64 * 1024;
 
 const LC_SEGMENT = 0x1;
 const LC_SEGMENT_64 = 0x19;
@@ -412,6 +410,7 @@ export interface MachoSliceHeader {
   readonly cpuType: number;
   readonly cpuSubtype: number;
   readonly fileType: number;
+  readonly flags: number;
   readonly commandCount: number;
   readonly commandBytes: number;
 }
@@ -455,14 +454,22 @@ export const readSliceCommandTable = async (
       "big-endian Mach-O slices are not supported",
       null,
     );
-  const { wide, headerSize, commandCount, commandBytes, fileType, identity } =
-    parsed.value;
+  const {
+    wide,
+    headerSize,
+    commandCount,
+    commandBytes,
+    fileType,
+    flags,
+    identity,
+  } = parsed.value;
   const header: MachoSliceHeader = {
     wide,
     headerSize,
     cpuType: identity.cpuType,
     cpuSubtype: identity.cpuSubtype,
     fileType,
+    flags,
     commandCount,
     commandBytes,
   };
@@ -762,8 +769,7 @@ const decodeCommand = (
     return;
   }
   if (command === LC_CODE_SIGNATURE) {
-    // linkedit_data_command: cmd, cmdsize, dataoff, datasize.
-    if (body.byteLength < 16)
+    if (readMachoLinkeditDataCommand(LC_CODE_SIGNATURE, body, true) === null)
       throw new MachoFormatIssue(
         "malformed",
         `load command ${index} is too short for LC_CODE_SIGNATURE`,

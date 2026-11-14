@@ -7,45 +7,23 @@ import { artifactInventorySummaryViewResultSchema } from "../../src/domain/analy
 import { artifactComparisonResultSchema } from "../../src/domain/artifactComparison.js";
 import { artifactInspectionResultSchema } from "../../src/domain/artifactInspection.js";
 import { artifactInventoryResultSchema } from "../../src/domain/artifactGraph.js";
-import {
-  artifactGraphDigest,
-  artifactManifestId,
-} from "../../src/domain/artifactIdentity.js";
-import {
-  createEvidence,
-  parseEvidence,
-  type Evidence,
-} from "../../src/domain/evidence.js";
+import { parseEvidence, type Evidence } from "../../src/domain/evidence.js";
+import { historicalInventoryEvidence } from "../fixtures/artifactEvidence.js";
+import { connectArtifactComparisonMcp } from "../fixtures/artifactComparisonMcp.js";
 import { connectLocalToolsMcp } from "../fixtures/localToolsMcp.js";
 import { createTestTempDirectory } from "../fixtures/temporaryDirectory.js";
 
 it("reports an ESP segment whose load address alone changed", async () => {
   const root = await createTestTempDirectory("rea-esp-comparison-");
-  const { call } = await connectLocalToolsMcp();
+  const { inspect: inspectFile, compare } =
+    await connectArtifactComparisonMcp();
   const inspect = async (
     name: string,
     segments: typeof ESP32C3_APP_SEGMENTS,
   ): Promise<Evidence> => {
     const path = join(root, name);
     await writeFile(path, espImage({ segments }));
-    const opened = await call("open_binary", { path });
-    expect(opened.isError, JSON.stringify(opened)).not.toBe(true);
-    const response = await call("inspect_artifact", {});
-    expect(response.isError, JSON.stringify(response)).not.toBe(true);
-    const inventory = artifactInspectionResultSchema
-      .parse(parseEvidence(response.structuredContent).normalized_result)
-      .substeps.find(
-        ({ operation }) => operation === "inventory_artifact",
-      )?.evidence;
-    if (inventory === undefined) throw new Error("Missing inventory Evidence");
-    return parseEvidence(inventory);
-  };
-  const compare = async (left: Evidence, right: Evidence) => {
-    const response = await call("compare_artifacts", { left, right });
-    expect(response.isError, JSON.stringify(response)).not.toBe(true);
-    return artifactComparisonResultSchema.parse(
-      parseEvidence(response.structuredContent).normalized_result,
-    );
+    return inspectFile(path);
   };
   const segment = (evidence: Evidence, path: string) => {
     const occurrence = artifactInventoryResultSchema
@@ -95,46 +73,14 @@ it("reports an ESP segment whose load address alone changed", async () => {
 
 /** The inventory as REA recorded it before ESP image roots had `flash_dump`. */
 const withoutFlashDump = (source: Evidence): Evidence => {
-  const inventory = artifactInventoryResultSchema.parse(
-    source.normalized_result,
-  );
-  const occurrences = inventory.occurrences.map((occurrence) => {
-    if (occurrence.format_metadata?.kind !== "esp-image") return occurrence;
-    const { flash_dump: _dump, ...historical } = occurrence.format_metadata;
-    return { ...occurrence, format_metadata: historical };
-  });
-  // Recommit the reduced graph, as that REA committed it.
-  const graphSha256 = artifactGraphDigest({
-    nodes: inventory.nodes,
-    occurrences,
-    edges: inventory.edges,
-    contradictions: inventory.integrity_contradictions,
-  });
-  return createEvidence(
-    {
-      path: source.subject!.local_path,
-      sha256: inventory.manifest.root_sha256,
-      format: inventory.manifest.root_format,
+  return historicalInventoryEvidence(
+    source,
+    (occurrence) => {
+      if (occurrence.format_metadata?.kind !== "esp-image") return occurrence;
+      const { flash_dump: _dump, ...historical } = occurrence.format_metadata;
+      return { ...occurrence, format_metadata: historical };
     },
-    source.provider,
-    {
-      operation: "inventory_artifact",
-      parameters: {},
-      result: {
-        ...inventory,
-        occurrences,
-        manifest: {
-          ...inventory.manifest,
-          graph_sha256: graphSha256,
-          manifest_id: artifactManifestId(
-            inventory.manifest.root_artifact_id,
-            graphSha256,
-          ),
-        },
-      },
-      confidence: "observed",
-      authority: "shipped-artifact",
-    },
+    "observed",
   );
 };
 

@@ -12,6 +12,7 @@ import { run } from "../../src/main.js";
 import { registerProcessShutdown } from "../../src/main/processShutdown.js";
 import { ownStdioStartupInput } from "../../src/main/StdioStartupInput.js";
 import { MCP_SHUTDOWN_FAILED } from "../../src/main/messages.js";
+import { awaitAcknowledgement } from "../fixtures/lifecycleAcknowledgement.js";
 import {
   createDeferred,
   createTestBinarySession,
@@ -75,9 +76,15 @@ it.each([
       await new Promise<void>((resolve) =>
         signal.addEventListener("abort", () => resolve(), { once: true }),
       );
-      return err(
-        new AnalysisCancelledError("open_binary", { cause: signal.reason }),
-      );
+      return {
+        ok: false,
+        error: new AnalysisCancelledError("open_binary", {
+          cause: signal.reason,
+        }),
+        targetAtCompletion: null,
+        providerIdAtCompletion: null,
+        selection: { kind: "none" },
+      };
     });
     let closeFails = failedClose;
     const close = vi.spyOn(session, "close").mockImplementation(async () =>
@@ -101,37 +108,49 @@ it.each([
       registerShutdown: (handler) =>
         registerProcessShutdown(handler, { signals, stdin: input }),
     });
-    const signal = await entered.promise;
-    expect(signals.listenerCount("SIGINT")).toBe(1);
-    expect(signals.listenerCount("SIGTERM")).toBe(1);
-    if (trigger === "EOF") input.end();
-    else if (trigger === "CAPACITY")
-      input.write(Buffer.alloc(STDIO_DEFAULT_MAX_BUFFER_SIZE + 1));
-    else if (trigger === "READ_ERROR")
-      input.emit("error", new Error("controlled stdin read failure"));
-    else signals.emit(trigger);
-    expect(await pending).toBe(failedClose ? 1 : 0);
-    expect(signal.aborted).toBe(true);
-    expect(serve).not.toHaveBeenCalled();
-    expect(close).toHaveBeenCalledWith({ retainProviderDocuments: true });
-    if (failedClose) {
-      expect(output.join("")).toContain(MCP_SHUTDOWN_FAILED);
-      if (trigger === "CAPACITY" || trigger === "READ_ERROR") {
-        const primary =
-          trigger === "CAPACITY"
-            ? "MCP input exceeded"
-            : "MCP stdin could not be read";
-        expect(output.join("")).toContain(primary);
-        expect(output.join("").indexOf(primary)).toBeLessThan(
-          output.join("").indexOf(MCP_SHUTDOWN_FAILED),
-        );
-      }
+    try {
+      await awaitAcknowledgement(
+        entered.promise.then(() => undefined),
+        pending,
+        "initial target open",
+        10_000,
+      );
+      const signal = await entered.promise;
+      expect(signals.listenerCount("SIGINT")).toBe(1);
+      expect(signals.listenerCount("SIGTERM")).toBe(1);
+      if (trigger === "EOF") input.end();
+      else if (trigger === "CAPACITY")
+        input.write(Buffer.alloc(STDIO_DEFAULT_MAX_BUFFER_SIZE + 1));
+      else if (trigger === "READ_ERROR")
+        input.emit("error", new Error("controlled stdin read failure"));
+      else signals.emit(trigger);
+      expect(await pending).toBe(failedClose ? 1 : 0);
+      expect(signal.aborted).toBe(true);
+      expect(serve).not.toHaveBeenCalled();
+      expect(close).toHaveBeenCalledWith({ retainProviderDocuments: true });
+      if (failedClose) {
+        expect(output.join("")).toContain(MCP_SHUTDOWN_FAILED);
+        if (trigger === "CAPACITY" || trigger === "READ_ERROR") {
+          const primary =
+            trigger === "CAPACITY"
+              ? "MCP input exceeded"
+              : "MCP stdin could not be read";
+          expect(output.join("")).toContain(primary);
+          expect(output.join("").indexOf(primary)).toBeLessThan(
+            output.join("").indexOf(MCP_SHUTDOWN_FAILED),
+          );
+        }
+        closeFails = false;
+        signals.emit("SIGINT");
+        await expect.poll(() => signals.listenerCount("SIGINT")).toBe(0);
+      } else expect(output).toEqual([]);
+      expect(signals.listenerCount("SIGTERM")).toBe(0);
+    } finally {
       closeFails = false;
       signals.emit("SIGINT");
-      await expect.poll(() => signals.listenerCount("SIGINT")).toBe(0);
-    } else expect(output).toEqual([]);
-    expect(signals.listenerCount("SIGTERM")).toBe(0);
-    input.destroy();
+      input.destroy();
+      await pending.catch(() => undefined);
+    }
   },
 );
 
@@ -139,7 +158,7 @@ it.each(["optional", "late-handle"] as const)(
   "closes resources settling after startup cancellation at %s",
   async (stage) => {
     const session = sessionOwner();
-    vi.spyOn(session, "open").mockResolvedValue(ok(target));
+    vi.spyOn(session, "open").mockResolvedValue({ ok: true, value: target });
     const closeSession = vi.spyOn(session, "close").mockResolvedValue(ok(null));
     const input = new PassThrough();
     const signals = new EventEmitter();
@@ -167,25 +186,36 @@ it.each(["optional", "late-handle"] as const)(
       registerShutdown: (handler) =>
         registerProcessShutdown(handler, { signals, stdin: input }),
     });
-    await entered.promise;
-    if (stage === "optional") {
-      await new Promise<void>((resolve) => {
-        input.once("end", resolve);
-        input.end();
+    try {
+      await awaitAcknowledgement(
+        entered.promise,
+        pending,
+        "startup stage",
+        10_000,
+      );
+      if (stage === "optional") {
+        await new Promise<void>((resolve) => {
+          input.once("end", resolve);
+          input.end();
+        });
+      } else signals.emit("SIGTERM");
+      expect(closeHandle).not.toHaveBeenCalled();
+      expect(closeSession).not.toHaveBeenCalled();
+      release.resolve();
+      expect(await pending).toBe(0);
+      expect(serve).toHaveBeenCalledTimes(stage === "optional" ? 0 : 1);
+      expect(closeHandle).toHaveBeenCalledTimes(stage === "optional" ? 0 : 1);
+      expect(closeSession).toHaveBeenCalledTimes(1);
+      expect(closeSession).toHaveBeenCalledWith({
+        retainProviderDocuments: true,
       });
-    } else signals.emit("SIGTERM");
-    expect(closeHandle).not.toHaveBeenCalled();
-    expect(closeSession).not.toHaveBeenCalled();
-    release.resolve();
-    expect(await pending).toBe(0);
-    expect(serve).toHaveBeenCalledTimes(stage === "optional" ? 0 : 1);
-    expect(closeHandle).toHaveBeenCalledTimes(stage === "optional" ? 0 : 1);
-    expect(closeSession).toHaveBeenCalledTimes(1);
-    expect(closeSession).toHaveBeenCalledWith({
-      retainProviderDocuments: true,
-    });
-    expect(signals.listenerCount("SIGINT")).toBe(0);
-    input.destroy();
+      expect(signals.listenerCount("SIGINT")).toBe(0);
+    } finally {
+      signals.emit("SIGTERM");
+      release.resolve();
+      input.destroy();
+      await pending.catch(() => undefined);
+    }
   },
 );
 

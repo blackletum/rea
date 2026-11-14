@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { createTestTempDirectory } from "../../tests/fixtures/temporaryDirectory.js";
 import { ok } from "../domain/result.js";
 import { parseConfig } from "../config/parseConfig.js";
 import type {
@@ -13,11 +12,18 @@ import { HopperProvider } from "../hopper/HopperProvider.js";
 import { hopperLoaderArgsForTarget } from "../hopper/HopperAnalysisProfile.js";
 import { IdaProvider } from "../ida/IdaProvider.js";
 import { GhidraProvider } from "./GhidraProvider.js";
-import { ghidraMipsProfileParameters } from "./GhidraMipsProfile.js";
-import { ghidraProfileInstallationHost as host } from "./GhidraInstallation.fixture.js";
+import {
+  ghidraMipsProfileMismatchReason,
+  ghidraMipsProfileParameters,
+} from "./GhidraMipsProfile.js";
+import {
+  ghidraProfileInstallationHost as host,
+  simulatedInstallDirectory,
+} from "./GhidraInstallation.fixture.js";
 import { GHIDRA_SESSION_CAPABILITIES } from "./GhidraSessionValues.js";
 import type { GhidraMipsSoftFloatReport } from "./GhidraMipsProfile.js";
 import {
+  existingGhidraAnalysisProfile,
   ghidraPinnedLanguage,
   ghidraProfileLanguageOverride,
   ghidraProfilePinnedLanguage,
@@ -41,7 +47,7 @@ const MIPS_LANGUAGE_DEFINITIONS = `<?xml version="1.0" encoding="UTF-8"?>
 `;
 
 const installedMipsConfig = async () => {
-  const installDir = await createTestTempDirectory("rea-ghidra-mips-");
+  const installDir = await simulatedInstallDirectory("rea-ghidra-mips-");
   const languages = join(installDir, "Ghidra/Processors/MIPS/data/languages");
   await mkdir(languages, { recursive: true });
   await writeFile(join(languages, "mips.ldefs"), MIPS_LANGUAGE_DEFINITIONS);
@@ -96,6 +102,28 @@ const abi = (
 const softFloat = abi({ cpr1Size: 0, fpAbi: 3 });
 
 describe("bounded Ghidra MIPS admission", () => {
+  it("binds a saved project's MIPS metadata without claiming a fresh-import lane", () => {
+    const little = target();
+    const big = target({ byteOrder: "big" });
+    const profile = existingGhidraAnalysisProfile(
+      little,
+      { id: "ghidra", name: "Ghidra", version: "12.1.4" },
+      { project_name: "fixture" },
+    );
+    expect(profile.parameters).not.toHaveProperty("mips_support_lane");
+    expect(
+      ghidraMipsProfileMismatchReason(little, profile.parameters, true),
+    ).toBeNull();
+    expect(
+      ghidraMipsProfileMismatchReason(big, profile.parameters, true),
+    ).toMatch(/metadata does not match/u);
+    expect(
+      ghidraMipsProfileMismatchReason(little, profile.parameters, false),
+    ).toMatch(/different target/u);
+    expect(ghidraMipsProfileMismatchReason(little, {}, true)).toMatch(
+      /metadata does not match/u,
+    );
+  });
   it("binds endian and flags without widening Windows P0", async () => {
     const ghidra = new GhidraProvider(config, silentLogger, {}, host);
     const little = target();

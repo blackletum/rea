@@ -88,9 +88,9 @@ export class FridaInstrumentationManager {
 }
 `,
     );
-    await writeFile(
+    await copyFile(
+      new URL("../../../dist/domain/fridaRemoteAddress.js", import.meta.url),
       join(root, "dist", "domain", "fridaRemoteAddress.js"),
-      "export const isValidFridaRemoteAddress = () => false;\n",
     );
   } else {
     await mkdir(join(root, "dist", "composition"));
@@ -149,7 +149,6 @@ processTest.for(cases)(
           REA_TEST_VERIFIER_CLOSE_FAIL: closeFails ? "1" : "0",
           REA_TEST_VERIFIER_CLOSE_LOG: fixture.closeLog,
         },
-        timeoutMs: 10_000,
       },
     );
 

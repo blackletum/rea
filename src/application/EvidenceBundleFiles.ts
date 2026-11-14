@@ -4,6 +4,7 @@ import { jsonValueValidationIssue } from "../domain/jsonValue.js";
 import { analysisErrorWithCleanupFailure } from "../domain/analysisErrorCleanup.js";
 import { requireAuthenticationHeadroom } from "./JsonAuthenticationHeadroom.js";
 import { absoluteCallerPath } from "../filesystem/callerPath.js";
+import { resemblesAnalysisSnapshot } from "../domain/analysisSnapshot.js";
 
 import { describeValidationFailure } from "../domain/validationFailure.js";
 import {
@@ -30,16 +31,11 @@ import {
 import { readJsonFile, writeTextParts } from "./JsonFiles.js";
 import type { ArtifactResourceScope } from "../artifacts/ArtifactResourceScope.js";
 
-type EvidenceReadFailure =
+type EvidenceBundleFileFailure =
   | EvidenceFileError
   | EvidenceIntegrityError
   | AnalysisResourceConstraintError
   | AnalysisCancelledError;
-type EvidenceWriteFailure =
-  | EvidenceFileError
-  | EvidenceIntegrityError
-  | AnalysisCancelledError
-  | AnalysisResourceConstraintError;
 
 /** Project a published bundle with record and residual-unknown revision counts. */
 export const evidenceBundleExportReceipt = (
@@ -58,7 +54,7 @@ export const readEvidenceBundle = (
   signal?: AbortSignal,
   resources?: ArtifactResourceScope,
   operation = "import_evidence_bundle",
-): Promise<Result<EvidenceBundle, EvidenceReadFailure>> =>
+): Promise<Result<EvidenceBundle, EvidenceBundleFileFailure>> =>
   readBundle(path, false, signal, resources, operation);
 
 /** Read an authenticated immutable snapshot for a subsequent session import. */
@@ -67,7 +63,7 @@ export const readImmutableEvidenceBundle = (
   signal?: AbortSignal,
   resources?: ArtifactResourceScope,
   operation = "import_evidence_bundle",
-): Promise<Result<EvidenceBundle, EvidenceReadFailure>> =>
+): Promise<Result<EvidenceBundle, EvidenceBundleFileFailure>> =>
   readBundle(path, true, signal, resources, operation);
 
 /** Join both comparison reads and preserve cleanup owned by either failed input. */
@@ -108,7 +104,7 @@ const readBundle = async (
   signal?: AbortSignal,
   resources?: ArtifactResourceScope,
   operation = "import_evidence_bundle",
-): Promise<Result<EvidenceBundle, EvidenceReadFailure>> => {
+): Promise<Result<EvidenceBundle, EvidenceBundleFileFailure>> => {
   if (signal?.aborted)
     return err(
       new AnalysisCancelledError(operation, {
@@ -134,7 +130,7 @@ export const authenticateEvidenceBundleValue = (
   value: unknown,
   path: string,
   options: { readonly operation: string; readonly immutable?: boolean },
-): Result<EvidenceBundle, EvidenceReadFailure> => {
+): Result<EvidenceBundle, EvidenceBundleFileFailure> => {
   const { operation } = options;
   const headroom = requireAuthenticationHeadroom(value, {
     operation,
@@ -155,6 +151,21 @@ export const authenticateEvidenceBundleValue = (
           path: absoluteCallerPath(path),
           cause: failure.cause,
           userMessage: failure.message,
+        }),
+      );
+    if (
+      operation === "import_evidence_bundle" &&
+      typeof value === "object" &&
+      value !== null &&
+      !Object.hasOwn(value, "records") &&
+      resemblesAnalysisSnapshot(value)
+    )
+      return err(
+        new EvidenceFileError("read", "wrong-kind", {
+          path: absoluteCallerPath(path),
+          cause: failure.cause,
+          userMessage:
+            "This JSON appears to be an analysis snapshot rather than an Evidence bundle. Its snapshot content has not been validated. To restore it, use a matching target, provider and analysis profile: call open_binary with snapshot_path set to this file, or pass --snapshot to a compatible CLI analysis command (which loads and updates the snapshot). Alternatively, supply a bundle from export_evidence_bundle.",
         }),
       );
     return err(
@@ -210,7 +221,7 @@ export const writeEvidenceBundle = async (
 ): Promise<
   Result<
     { readonly path: string; readonly bytes: number },
-    EvidenceWriteFailure
+    EvidenceBundleFileFailure
   >
 > => {
   if (signal?.aborted === true)

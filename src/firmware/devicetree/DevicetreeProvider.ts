@@ -1,10 +1,14 @@
 import {
+  projectSelectedArtifactFileFailure,
   projectStableArtifactFailure,
+  stableArtifactInputRecovery,
   projectArtifactCloseFailure,
 } from "../../artifacts/StableArtifactFailure.js";
-import { isSelectedRegularFileError } from "../../filesystem/RegularFile.js";
 import { ArtifactReaderFailure } from "../../artifacts/ArtifactReader.js";
-import { readStableArtifact } from "../../artifacts/readStableArtifact.js";
+import {
+  type StableArtifactSnapshot,
+  readStableArtifact,
+} from "../../artifacts/readStableArtifact.js";
 import {
   artifactFilePrimaryFacts,
   type ArtifactFilePrimaryFacts,
@@ -15,7 +19,6 @@ import type { DevicetreePort } from "../../application/binaryDiagnostics/Devicet
 import type { ExecutionOptions } from "../../application/AnalysisProvider.js";
 import { ArtifactOperationError } from "../../domain/artifactOperationError.js";
 import {
-  AnalysisAccessDeniedError,
   AnalysisArtifactChangedError,
   AnalysisCancelledError,
   AnalysisInputError,
@@ -51,9 +54,10 @@ export class DevicetreeProvider implements DevicetreePort {
   }
 
   async inspect(input: InspectDevicetreeInput, options?: ExecutionOptions) {
+    let snapshot: StableArtifactSnapshot | undefined;
     try {
       return await this.#resources.run(async () => {
-        const snapshot = await readStableArtifact(
+        snapshot = await readStableArtifact(
           input.path,
           input.max_file_bytes,
           options?.signal,
@@ -73,7 +77,7 @@ export class DevicetreeProvider implements DevicetreePort {
         );
       });
     } catch (cause) {
-      return err(devicetreeFailure(cause, input));
+      return err(devicetreeFailure(cause, input, snapshot));
     }
   }
 }
@@ -153,28 +157,25 @@ const devicetreeFailurePrimary = (
     }
 
     if (cause.reason === "path" || cause.reason === "format")
-      return new AnalysisInputError(OPERATION, { cause }, [
-        {
-          path: ["path"],
-          reason: "invalid_format",
-          message: cause.message,
-        },
-      ]);
+      return new AnalysisInputError(
+        OPERATION,
+        { cause, ...stableArtifactInputRecovery(cause) },
+        [
+          {
+            path: ["path"],
+            reason: "invalid_format",
+            message: cause.message,
+          },
+        ],
+      );
   }
-  if (cause instanceof Error && "code" in cause) {
-    if (cause.code === "EACCES" || cause.code === "EPERM")
-      return new AnalysisAccessDeniedError(OPERATION, input.path, cause.code, {
-        cause,
-      });
-    if (isSelectedRegularFileError(cause))
-      return new AnalysisInputError(OPERATION, { cause }, [
-        {
-          path: ["path"],
-          reason: "invalid_value",
-          message: `Selected devicetree blob could not be read (${String(cause.code)}): ${input.path}.`,
-        },
-      ]);
-  }
+  const fileFailure = projectSelectedArtifactFileFailure(
+    cause,
+    OPERATION,
+    input.path,
+    "devicetree blob",
+  );
+  if (fileFailure !== undefined) return fileFailure;
   return new ArtifactOperationError(
     OPERATION,
     origin === "owned-or-classified" && cause instanceof ArtifactReaderFailure
@@ -186,7 +187,11 @@ const devicetreeFailurePrimary = (
   );
 };
 
-const devicetreeFailure = (cause: unknown, input: InspectDevicetreeInput) => {
+const devicetreeFailure = (
+  cause: unknown,
+  input: InspectDevicetreeInput,
+  snapshot?: StableArtifactSnapshot,
+) => {
   const primary = devicetreeFailurePrimary(
     artifactFilePrimaryFacts(cause),
     input,
@@ -197,5 +202,6 @@ const devicetreeFailure = (cause: unknown, input: InspectDevicetreeInput) => {
     input.path,
     DEVICETREE_PROVIDER.id,
     OPERATION,
+    snapshot,
   );
 };

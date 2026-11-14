@@ -1,5 +1,7 @@
+import { discoverJavaScriptPreloadPaths } from "./JavaScriptPreloadDiscovery.js";
 import { artifactNameForClassification } from "../../domain/artifactNameSelection.js";
 import type { AnalysisSettingValues } from "../../domain/analysisSettings.js";
+import { selectedAnalysisSetting } from "../../domain/analysisSettingDefinitions.js";
 import { absoluteCallerPath } from "../../filesystem/callerPath.js";
 import {
   DEFAULT_ASAR_HEADER_ADMISSION,
@@ -180,24 +182,43 @@ export const reconstructJavaScriptArtifact = async (
           ? {}
           : { fileNodes: input.max_semantic_nodes_per_file }),
       });
+      const heap = selectedAnalysisSetting(
+        input.max_heap_mb,
+        overrides?.["javascript.max_heap_mb"],
+        JAVASCRIPT_ANALYSIS_RESOURCE_DEFAULTS.heapMb,
+      );
+      const timeout = selectedAnalysisSetting(
+        input.analysis_timeout_ms,
+        overrides?.["javascript.analysis_timeout_ms"],
+        JAVASCRIPT_ANALYSIS_RESOURCE_DEFAULTS.timeoutMs,
+      );
+      const sourceLimits = {
+        ...(input.semantic_precision === undefined
+          ? {}
+          : { semanticPrecision: input.semantic_precision }),
+        heapMb: heap.value,
+        heapSource: heap.source,
+        timeoutMs: timeout.value,
+        timeoutSource: timeout.source,
+      };
+      const preloads = await discoverJavaScriptPreloadPaths(
+        files,
+        sourceLimits,
+        scope,
+        signal,
+      );
       const worker = await createJavaScriptSourceAnalysis(
-        {
-          heapMb:
-            input.max_heap_mb ??
-            overrides?.["javascript.max_heap_mb"] ??
-            JAVASCRIPT_ANALYSIS_RESOURCE_DEFAULTS.heapMb,
-          timeoutMs:
-            input.analysis_timeout_ms ??
-            overrides?.["javascript.analysis_timeout_ms"] ??
-            JAVASCRIPT_ANALYSIS_RESOURCE_DEFAULTS.timeoutMs,
-        },
+        sourceLimits,
         files.files.filter(
           (file) => file.kind === "javascript" && file.text.included,
         ).length,
         { scope },
       );
-      let outcome;
-      let cleanupFailure: AnalysisError | undefined;
+      let outcome!: Awaited<
+        ReturnType<typeof analyzeAndAdoptJavaScriptArtifactFiles>
+      >;
+      let analysisFailure: { readonly cause: unknown } | undefined;
+      let cleanupAttempt: Awaited<ReturnType<ArtifactResourceScope["release"]>>;
       try {
         outcome = await analyzeAndAdoptJavaScriptArtifactFiles(
           files,
@@ -229,19 +250,31 @@ export const reconstructJavaScriptArtifact = async (
             });
             abortIfNeeded(signal);
           },
+          preloads.paths,
+          preloads.limitations,
         );
+      } catch (cause: unknown) {
+        analysisFailure = { cause };
       } finally {
-        try {
-          const cleanup = await scope.release({
-            kind: "javascript-source-analysis",
-            analysis: worker,
-            resource: `JavaScript source analyzer for ${path}`,
-          });
-          if (cleanup.kind === "failed") throw cleanup.cause;
-        } catch (cause: unknown) {
-          if (!(cause instanceof AnalysisError)) throw cause;
-          cleanupFailure = cause;
-        }
+        cleanupAttempt = await scope.release({
+          kind: "javascript-source-analysis",
+          analysis: worker,
+          resource: `JavaScript source analyzer for ${path}`,
+        });
+      }
+      if (analysisFailure !== undefined) {
+        if (cleanupAttempt.kind === "failed")
+          throw scope.cleanupFailure(
+            { kind: "failed", cause: analysisFailure.cause },
+            [cleanupAttempt],
+          );
+        throw analysisFailure.cause;
+      }
+      let cleanupFailure: AnalysisError | undefined;
+      if (cleanupAttempt.kind === "failed") {
+        if (!(cleanupAttempt.cause instanceof AnalysisError))
+          throw cleanupAttempt.cause;
+        cleanupFailure = cleanupAttempt.cause;
       }
       const analysis = outcome.analysis;
       let interruption = outcome.interruption;

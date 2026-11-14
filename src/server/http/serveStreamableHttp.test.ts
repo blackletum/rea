@@ -580,12 +580,13 @@ it("does not let a JSON-suffixed media type replace the session", async () => {
 });
 
 it("releases the listener when the server factory fails after the port is bound", async () => {
+  const port = await listenEphemeral();
   const logs: string[] = [];
   const logger = pino({ level: "debug" }, { write: (line) => logs.push(line) });
   const seen: string[] = [];
   const failing = serveStreamableHttp({
     host: "127.0.0.1",
-    port: 0,
+    port,
     logger,
     createMcpServer: () => {
       throw new Error("provider unavailable");
@@ -594,6 +595,9 @@ it("releases the listener when the server factory fails after the port is bound"
   await expect(failing).rejects.toThrow("provider unavailable");
   for (const line of logs) seen.push((JSON.parse(line) as { msg: string }).msg);
   expect(seen).not.toContain("MCP transport listening");
+  await expect(start({ port })).resolves.toMatchObject({
+    served: { close: expect.any(Function) },
+  });
 });
 
 it("classifies loopback from the bound address and lists the configured name beside it", () => {
@@ -781,7 +785,7 @@ it("answers an oversized sessionless POST promptly instead of stalling on the pr
     { type: "text", text: "still served" },
   ]);
   await client.close();
-}, 20_000);
+});
 
 it("closes the connection after a reply sent before the request body was read, on a keep-alive client", async () => {
   const { served } = await start();

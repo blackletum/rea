@@ -78,7 +78,7 @@ describe("Ghidra MCP capability routing", () => {
     } finally {
       await harness.close();
     }
-  }, 30_000);
+  });
 
   it("keeps a Ghidra null-pseudocode observation's limitations on its batch item", async () => {
     const bodyless = "0x401020";
@@ -124,11 +124,8 @@ describe("Ghidra MCP capability routing", () => {
           expect.objectContaining({ address: "0x401000", status: "ok" }),
           expect.objectContaining({
             address: bodyless,
-            status: "error",
-            error: expect.objectContaining({
-              code: "capability_unavailable",
-              details: expect.objectContaining({ provider_id: "ghidra" }),
-            }),
+            status: "unavailable",
+            reason: "no_pseudocode",
             limitations: [...new Set(observed.limitations)],
           }),
         ],
@@ -139,5 +136,5 @@ describe("Ghidra MCP capability routing", () => {
     } finally {
       await harness.close();
     }
-  }, 30_000);
+  });
 });
