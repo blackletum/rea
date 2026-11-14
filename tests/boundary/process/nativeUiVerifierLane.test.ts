@@ -29,10 +29,13 @@ ${standInPrelude}
 record("launcher");
 const args = process.argv.slice(2);
 const coordinates = args[args.indexOf("--stdout") + 1];
+// Like \`open -W\`, the stand-in returns only once the app it started exits.
 spawn(process.execPath, [new URL("./fixture.mjs", import.meta.url).pathname], {
   detached: true,
   stdio: ["ignore", openSync(coordinates, "a"), "ignore"],
-}).unref();
+})
+  .once("exit", () => process.exit(0))
+  .unref();
 `;
 
 const fixtureSource = `
