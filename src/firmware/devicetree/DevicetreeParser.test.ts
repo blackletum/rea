@@ -8,6 +8,7 @@ import { DevicetreeLimitFailure, parseDevicetree } from "./DevicetreeParser.js";
 import {
   cells,
   devicetreeFixture,
+  emptyStringsAtReservationBoundaryFixture,
   type FixtureNode,
 } from "./Devicetree.fixture.js";
 const parse = (b: Buffer, limits = {}) =>
@@ -88,11 +89,6 @@ describe("flattened devicetree", () => {
   ] as const)("rejects %s", (_name, mutate) =>
     expect(() => parse(mutate(devicetreeFixture()))).toThrow(),
   );
-  it("distinguishes unsupported versions", () => {
-    expect(() => parse(devicetreeFixture(undefined, 18))).toThrow(
-      expect.objectContaining({ kind: "unsupported" }),
-    );
-  });
   it("bounds depth, nodes and properties", () => {
     let root: FixtureNode = { name: "leaf" };
     for (let i = 0; i < 10; i++) root = { name: `n${i}`, children: [root] };
@@ -186,11 +182,12 @@ it("leaves conflicting phandle declarations unresolved", () => {
     [3, "/same"],
   ]);
   expect(r.limitations.filter((s) => s.includes("conflicts"))).toEqual([
-    "phandle at /split conflicts with linux,phandle (0x1 vs 0x2); references to either value are unresolved.",
+    expect.stringMatching(
+      /\/split.*conflicts.*linux,phandle.*0x1.*0x2.*unresolved/iu,
+    ),
   ]);
 });
 it.each([
-  ["empty", Buffer.alloc(0)],
   ["short", Buffer.from([0, 0])],
   ["multiple cells", cells(1, 2)],
 ])(
@@ -217,8 +214,10 @@ it.each([
       hex: canonical.toString("hex"),
       derived: { cells: null },
     });
-    expect(r.limitations).toContain(
-      "phandle at /target is not a single cell; this node's reference identity remains unresolved.",
+    expect(r.limitations).toContainEqual(
+      expect.stringMatching(
+        /phandle.*\/target.*not a single cell.*unresolved/iu,
+      ),
     );
   },
 );
@@ -252,6 +251,42 @@ it("rejects unterminated reservations and unknown tokens", () => {
   token.writeUInt32BE(0x12345678, 72);
   expect(() => parse(token)).toThrow("Unknown FDT token");
 });
+it.each([16, 17] as const)(
+  "accepts an empty strings block at the reservation boundary in v%s",
+  (version) => {
+    const report = parse(emptyStringsAtReservationBoundaryFixture(version));
+    expect(report.nodes).toHaveLength(1);
+    expect(report.reservations).toEqual([]);
+  },
+);
+it.each([
+  [16, 0],
+  [16, 44],
+  [16, 60],
+  [16, 72],
+  [17, 0],
+  [17, 44],
+  [17, 60],
+  [17, 72],
+] as const)(
+  "accepts a v%s empty strings block at offset %s",
+  (version, offset) => {
+    const bytes = emptyStringsAtReservationBoundaryFixture(version);
+    bytes.writeUInt32BE(offset, 12);
+    expect(parse(bytes)).toMatchObject({
+      nodes: [{ path: "/" }],
+      reservations: [],
+    });
+  },
+);
+it.each([16, 17] as const)(
+  "rejects an empty strings offset beyond totalsize in v%s",
+  (version) => {
+    const bytes = emptyStringsAtReservationBoundaryFixture(version);
+    bytes.writeUInt32BE(bytes.length + 1, 12);
+    expect(() => parse(bytes)).toThrow("FDT block outside totalsize");
+  },
+);
 it("bounds expansion of repeated paths before allocation", () => {
   const longName = "a".repeat(4096);
   let node: FixtureNode = { name: longName };

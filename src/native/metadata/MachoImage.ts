@@ -1,10 +1,16 @@
+import { LC } from "../../domain/apple/machoLoadCommandCodes.js";
+import type {
+  FileMapping,
+  ZeroFillMapping,
+} from "../../domain/virtualFileMapping.js";
 import { decodeMachoFixedName } from "../AppleMachoNames.js";
 import {
+  isMachoZeroFillSection,
   readMachoSectionHeader,
   type MachoSectionHeader,
 } from "../../domain/apple/machoSectionHeader.js";
 import {
-  admitMachoSegmentMapping,
+  admitMachoSegmentCommand,
   readMachoSegmentHeader,
 } from "../../domain/apple/machoSegmentHeader.js";
 import {
@@ -12,10 +18,8 @@ import {
   BinaryFormatFailure,
   BinaryReader,
   type BinaryContainer,
-  type FileMapping,
   type ImageSection,
   type LoadRegion,
-  type ZeroFillMapping,
 } from "./BinaryContainer.js";
 import {
   MachoLoadCommandCursor,
@@ -31,7 +35,7 @@ export const readMachoImage = (bytes: Buffer): BinaryContainer => {
   const table = parsed.value;
   const { headerSize, commandBytes, littleEndian: little } = table;
   const bits = table.wide ? 64 : 32;
-  const reader = new BinaryReader(bytes, little);
+  const reader = new BinaryReader(bytes, little, "macho");
   const commandStart = reader.table(
     BigInt(headerSize),
     commandBytes,
@@ -50,9 +54,9 @@ export const readMachoImage = (bytes: Buffer): BinaryContainer => {
     const frame = commands.read(bytes.subarray(offset, offset + 8));
     if (!frame.ok) throw new BinaryFormatFailure("malformed", frame.error);
     const { command, size } = frame.value;
-    if (command === 0x80000034) chainedFixups = true;
-    if (command === 1 || command === 0x19) {
-      const wide = command === 0x19;
+    if (command === LC.DYLD_CHAINED_FIXUPS) chainedFixups = true;
+    if (command === LC.SEGMENT || command === LC.SEGMENT_64) {
+      const wide = command === LC.SEGMENT_64;
       if (wide !== (bits === 64))
         throw new BinaryFormatFailure(
           "malformed",
@@ -80,18 +84,18 @@ export const readMachoImage = (bytes: Buffer): BinaryContainer => {
         sectionCount,
         nameBytes,
       } = parsedSegment.value;
-      const admitted = admitMachoSegmentMapping(parsedSegment.value, bits);
+      const admitted = admitMachoSegmentCommand(
+        parsedSegment.value,
+        size,
+        bits,
+        bytes.length,
+      );
       if (!admitted.ok)
         throw new BinaryFormatFailure(
           admitted.error.kind,
           admitted.error.message,
         );
       const { unmapped } = admitted.value;
-      if (sectionCount > Math.floor((size - segmentHeader) / sectionWidth))
-        throw new BinaryFormatFailure(
-          "malformed",
-          "Mach-O section table exceeds its segment command",
-        );
       const fileRange =
         fileSize === 0n
           ? undefined
@@ -203,7 +207,7 @@ const machoImageSection = ({
   const sectionOffset = BigInt(section.offset);
   const sectionName = decodeMachoFixedName(section.nameBytes);
   const name = `${decodeMachoFixedName(section.segmentNameBytes)},${sectionName}`;
-  const zeroFill = [1, 0xc, 0x12].includes(flags & 0xff);
+  const zeroFill = isMachoZeroFillSection(flags);
   const addressDelta = sectionAddress - segmentAddress;
   const fileDelta = sectionOffset - segmentFileOffset;
   const inSegmentMemory =
@@ -229,10 +233,15 @@ const machoImageSection = ({
     name,
     section_name: sectionName,
     type: flags & 0xff,
+    flags,
     address: sectionAddress,
     declared_range: { offset: sectionOffset, size: sectionSize },
     segment_mapping: segmentMapping,
     segment_unmapped: segmentUnmapped,
+    relocations: {
+      offset: section.relocationOffset,
+      count: section.relocationCount,
+    },
     ...range,
     file_backed: fileBacked,
     read_only: readOnly,

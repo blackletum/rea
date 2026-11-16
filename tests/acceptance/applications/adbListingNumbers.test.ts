@@ -220,9 +220,13 @@ process.stdout.write(require('node:fs').readFileSync(path));
       ] as const) {
         await writeFile(path, listing.stdout);
         const contract = toolContract(operation);
-        const output = await cli.run({
+        const invocation = {
           arguments: [operation.replaceAll("_", "-"), SERIAL, "--json"],
           environment,
+        };
+        const output = await cli.run({
+          ...invocation,
+          freshProcess: variant === "safe",
         });
         expect(output.exitCode, output.stderr).toBe(0);
         const evidence = contract.outputSchema.parse(output.json);

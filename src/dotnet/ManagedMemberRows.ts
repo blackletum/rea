@@ -1,4 +1,5 @@
 import { readFieldDefinitionRow } from "./ManagedFieldDefinitionRows.js";
+import { createManagedFieldConstantReader } from "./ManagedFieldConstants.js";
 import { readMemberReferenceRowFacts } from "./ManagedMemberReferenceRows.js";
 import { readMethodDefinitionRow } from "./ManagedMethodDefinitionRows.js";
 import { jsonStringByteLength } from "../domain/jsonStringByteLength.js";
@@ -83,12 +84,28 @@ export const parseFields = (
   const fields: ManagedField[] = [];
   const core = new Map<string, MemberCore>();
   const issues: ManagedParseIssue[] = [];
+  const constant = createManagedFieldConstantReader(bytes, layout, issues);
   const table = layout.table(4);
   const ownerRow = readManagedValue(
     () => memberDeclaringTypeRowLookup(bytes, layout, 4, memberLists),
     issues,
   );
   for (let row = 1; row <= (table?.rowCount ?? 0); row += 1) {
+    // The owner comes from the shared range lookup, not the row itself: a
+    // row belonging to no selected type is skipped without a cursor or name
+    // charge. A selected method that references such a row keeps its name
+    // through readReferencedMemberCores instead.
+    const owner =
+      ownerRow === undefined
+        ? undefined
+        : readManagedValue(() => ownerRow(row), issues);
+    const declared = owner === undefined ? undefined : ranges[owner - 1];
+    if (
+      owner !== undefined &&
+      selected !== null &&
+      !isSelected(selected, declared)
+    )
+      continue;
     readManagedValue(() => {
       const { token, rowOffset, flags, nameIndex, signatureIndex } =
         readFieldDefinitionRow(bytes, layout, row);
@@ -98,11 +115,7 @@ export const parseFields = (
         nameIndex,
         layout.strings.size,
       );
-      const owner =
-        ownerRow === undefined
-          ? 0
-          : (readManagedValue(() => ownerRow(row), issues) ?? 0);
-      const declared = ranges[owner - 1];
+      const owned = owner ?? 0;
       core.set(token, {
         token,
         name,
@@ -131,7 +144,7 @@ export const parseFields = (
         kind: "field",
         identitySha256: memberTargetIdentity(
           name,
-          declared === undefined ? null : { table: 2, row: owner },
+          declared === undefined ? null : { table: 2, row: owned },
           decoded,
           declarationTypeName,
         ),
@@ -144,6 +157,7 @@ export const parseFields = (
         name,
         flags,
         signature: decoded,
+        constant: constant(row, flags),
       });
     }, issues);
   }
@@ -222,6 +236,7 @@ export const parseMemberRefs = (
   layout: ManagedMetadataLayout,
   {
     typeName,
+    isResolvedTypeSpec,
     signatureTypeName,
     displayTypeName,
     declarationTypeName,
@@ -229,6 +244,9 @@ export const parseMemberRefs = (
     readonly typeName: (
       reference: Pick<MetadataTokenFact, "table" | "row" | "token"> | null,
     ) => string | null;
+    readonly isResolvedTypeSpec: (
+      reference: Pick<MetadataTokenFact, "table" | "row" | "token"> | null,
+    ) => boolean;
     readonly signatureTypeName: SignatureTypeName;
     readonly displayTypeName: SignatureDisplayTypeName;
     readonly declarationTypeName: DeclarationTypeName;
@@ -292,6 +310,12 @@ export const parseMemberRefs = (
         declaringType: parentName,
         kind: decoded.kind,
         genericArity: signatureGenericArity(decoded),
+        rowResolved:
+          parent.kind === "valid" &&
+          parent.table === 27 &&
+          isResolvedTypeSpec(parent) &&
+          decoded.parse_status === "decoded" &&
+          decoded.resolved_sha256 !== null,
         identitySha256: memberTargetIdentity(
           name,
           parent.kind === "valid" ? parent : null,
@@ -368,6 +392,18 @@ export const parseMethods = ({
         isSelected(selected, declared) ||
         // A type whose name is unreadable may be one the caller requested.
         declared?.fullName === null);
+    // As in parseFields: a row belonging to no selected type is skipped
+    // without reading it. The unscanned count keeps its existing meaning:
+    // a skipped row hides a selected body only when its owner is unknown
+    // or unreadably named, which is exactly when mayBeSelected holds.
+    if (
+      owner !== undefined &&
+      selected !== null &&
+      !isSelected(selected, declared)
+    ) {
+      if (mayBeSelected) unscannedMethods += 1;
+      continue;
+    }
     const produced = methods.length;
     readManagedValue(() => {
       const {
@@ -458,6 +494,67 @@ export const parseMethods = ({
 };
 
 /**
+ * Core entries for Field and MethodDef rows a selected method's body
+ * references. Edge targets outside the selection keep their names, but
+ * reading every unselected row to name them spends the representation
+ * budget on the whole assembly; only referenced rows are read here.
+ * MemberRef tokens need no fill: member references decode in full.
+ */
+export const readReferencedMemberCores = (
+  bytes: Buffer,
+  layout: ManagedMetadataLayout,
+  ranges: readonly TypeRange[],
+  memberLists: TypeMemberListFacts,
+  references: Iterable<Pick<MetadataTokenFact, "table" | "row" | "token">>,
+): {
+  readonly core: ReadonlyMap<string, MemberCore>;
+  readonly issues: readonly ManagedParseIssue[];
+} => {
+  const core = new Map<string, MemberCore>();
+  const issues: ManagedParseIssue[] = [];
+  const ownerRows = new Map<number, ((row: number) => number) | undefined>();
+  const ownerOf = (table: 4 | 6, row: number): number => {
+    if (!ownerRows.has(table))
+      ownerRows.set(
+        table,
+        readManagedValue(
+          () => memberDeclaringTypeRowLookup(bytes, layout, table, memberLists),
+          issues,
+        ),
+      );
+    return ownerRows.get(table)?.(row) ?? 0;
+  };
+  for (const { table, row, token } of references) {
+    if (table !== 4 && table !== 6) continue;
+    if (core.has(token)) continue;
+    // A body can name a row its table does not contain: the edge stays
+    // unnamed, as before, instead of reporting a row that was never read.
+    // A row that exists but cannot be read still reports its issue below.
+    if (row < 1 || row > (layout.table(table)?.rowCount ?? 0)) continue;
+    readManagedValue(() => {
+      const declared = ranges[ownerOf(table, row) - 1];
+      const { nameIndex } =
+        table === 4
+          ? readFieldDefinitionRow(bytes, layout, row)
+          : readMethodDefinitionRow(bytes, layout, row);
+      const name = readMetadataString(
+        bytes,
+        layout,
+        nameIndex,
+        layout.strings.size,
+      );
+      core.set(token, {
+        token,
+        name,
+        declaringType: declared?.fullName ?? null,
+        kind: table === 4 ? "field" : "method",
+      });
+    }, issues);
+  }
+  return { core, issues };
+};
+
+/**
  * Member kinds each operand kind may name. A MemberRef whose signature does
  * not decode keeps its name on calls, as before, but is never named a field.
  */
@@ -518,6 +615,9 @@ export const edges = (
       if (!isManagedMemberReferenceInstruction(anchor)) continue;
       const { operand } = anchor;
       const target = namedTarget(members, anchor.operand_kind, operand);
+      const targetRowResolved =
+        target !== undefined &&
+        (target.identitySha256 != null || target.rowResolved === true);
       if (anchor.operand_kind === "method") {
         // Each derived record is admitted before the graph grows further.
         callEdges.push(
@@ -526,6 +626,7 @@ export const edges = (
               caller_token: method.token,
               il_offset: instruction.offset,
               target_identity_sha256: target?.identitySha256 ?? null,
+              target_row_resolved: targetRowResolved,
               caller,
               opcode: anchor.opcode,
               target_token: operand,
@@ -544,6 +645,7 @@ export const edges = (
               method_token: method.token,
               il_offset: instruction.offset,
               target_identity_sha256: target?.identitySha256 ?? null,
+              target_row_resolved: targetRowResolved,
               method: caller,
               opcode: anchor.opcode,
               field_token: operand,

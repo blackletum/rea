@@ -1,25 +1,20 @@
 import { projectCliAnalysisResult } from "./projectCliAnalysisResult.js";
 import { Cli, z } from "incur";
 import { createWebRuntimeService } from "../composition/webRuntime.js";
-import { browserCliError } from "./browserCliError.js";
+import { cliDomainInput } from "./domainInput.js";
+import { observeWebExecutionInputSchema } from "../domain/webExecution.js";
+import { inspectWebEventListenersInputSchema } from "../domain/webEventListeners.js";
 import {
   browserScopeOptions,
   selectedCommandTimeout,
 } from "../cliObservationOptions.js";
 import { logCliCommand } from "../cliLogging.js";
 import { CLI_COMMANDS } from "../cliCommandNames.js";
-import { MAX_BROWSER_DEADLINE_MS } from "../domain/browserDeadline.js";
+import { cliDecimalField } from "./options.js";
 import type { Logger } from "pino";
-import type { ProgressReporter } from "../application/ProgressReporter.js";
 import { withCommandCancellation } from "./commandCancellation.js";
 import { finishAnalysisCommand } from "./finishAnalysisCommand.js";
-
-/** CLI progress exposes the actual armed point on stderr without corrupting JSON results. */
-const runtimeProgress: ProgressReporter = {
-  report: async (update) => {
-    process.stderr.write(`${JSON.stringify({ rea_progress: update })}\n`);
-  },
-};
+import { cliProgressReporter } from "./cliProgress.js";
 
 /** Register public equivalents of the two modular website runtime tools. */
 export const registerWebRuntimeCommands = (
@@ -30,22 +25,18 @@ export const registerWebRuntimeCommands = (
     description:
       "Observe precise page execution; resets counters and temporarily disables optimization",
     args: z.object({
-      endpoint: z.string().describe("Existing loopback browser CDP endpoint"),
-      targetId: z
-        .string()
-        .describe("Selected page target ID from list-browser-targets"),
+      endpoint: cliDomainInput(
+        observeWebExecutionInputSchema.shape.cdp_endpoint,
+      ).describe("Existing loopback browser CDP endpoint"),
+      targetId: observeWebExecutionInputSchema.shape.target_id.describe(
+        "Selected page target ID from list-browser-targets",
+      ),
     }),
     options: z.object({
       ...browserScopeOptions,
-      // incur only coerces ZodNumber argv fields; domain z.int() constructs
-      // ZodNumberFormat. Preserve the canonical bounds in this CLI adapter.
-      observationMs: z
-        .number()
-        .int()
-        .min(1)
-        .max(MAX_BROWSER_DEADLINE_MS)
-        .default(10_000)
-        .describe("Observation duration in milliseconds"),
+      observationMs: cliDecimalField(
+        observeWebExecutionInputSchema.shape.observation_ms,
+      ).describe("Observation duration in milliseconds"),
     }),
     run: ({ args, options }) =>
       withCommandCancellation((signal) =>
@@ -61,7 +52,7 @@ export const registerWebRuntimeCommands = (
                   observation_ms: options.observationMs,
                   ...selectedCommandTimeout(options.commandTimeoutMs),
                 },
-                { progress: runtimeProgress, signal },
+                { progress: cliProgressReporter, signal },
               ),
             {
               close: async () => {
@@ -79,13 +70,15 @@ export const registerWebRuntimeCommands = (
     description:
       "Inspect native listener source locations on the first main-document CSS match",
     args: z.object({
-      endpoint: z.string().describe("Existing loopback browser CDP endpoint"),
-      targetId: z
-        .string()
-        .describe("Selected page target ID from list-browser-targets"),
-      selector: z
-        .string()
-        .describe("Native CSS selector; inspect the first main-document match"),
+      endpoint: cliDomainInput(
+        inspectWebEventListenersInputSchema.shape.cdp_endpoint,
+      ).describe("Existing loopback browser CDP endpoint"),
+      targetId: inspectWebEventListenersInputSchema.shape.target_id.describe(
+        "Selected page target ID from list-browser-targets",
+      ),
+      selector: inspectWebEventListenersInputSchema.shape.selector.describe(
+        "Native CSS selector; inspect the first main-document match",
+      ),
     }),
     options: z.object({ ...browserScopeOptions }),
     run: ({ args, options }) =>

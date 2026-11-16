@@ -14,6 +14,28 @@ import {
 
 const realSetTimeout = globalThis.setTimeout;
 
+const inlineJavaScriptCharMap: Record<string, string> = {
+  "<": "\\u003C",
+  ">": "\\u003E",
+  "/": "\\u002F",
+  "\\": "\\\\",
+  "\b": "\\b",
+  "\f": "\\f",
+  "\n": "\\n",
+  "\r": "\\r",
+  "\t": "\\t",
+  "\0": "\\0",
+  "\u2028": "\\u2028",
+  "\u2029": "\\u2029",
+};
+
+function escapeUnsafeCharsForInlineJavaScript(value: string): string {
+  return value.replace(
+    /[<>/\\\b\f\n\r\t\0\u2028\u2029]/g,
+    (character) => inlineJavaScriptCharMap[character] ?? character,
+  );
+}
+
 const waitForFile = async (path: string): Promise<boolean> => {
   for (let attempt = 0; attempt < 500; attempt += 1) {
     if (
@@ -185,7 +207,6 @@ describe("execFileOutput", () => {
         await execution;
       }
     },
-    10_000,
   );
 
   it.skipIf(process.platform === "win32")(
@@ -297,30 +318,34 @@ describe("execFileOutput cancellation lifecycle", () => {
     async () => {
       const directory = await createTestTempDirectory("rea-exec-double-stop-");
       const ready = join(directory, "ready");
+      const interrupted = join(directory, "interrupted");
       const script = [
         'const fs = require("node:fs");',
-        'for (const name of ["SIGINT", "SIGTERM"]) process.on(name, () => {});',
-        `fs.writeFileSync(${JSON.stringify(ready)}, "");`,
+        `process.on("SIGINT", () => fs.writeFileSync(${escapeUnsafeCharsForInlineJavaScript(JSON.stringify(interrupted))}, ""));`,
+        `fs.writeFileSync(${escapeUnsafeCharsForInlineJavaScript(JSON.stringify(ready))}, "");`,
         "setInterval(() => {}, 1000);",
       ].join("\n");
       const controller = new AbortController();
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       const execution = execFileOutput(process.execPath, ["-e", script], {
         signal: controller.signal,
         timeout: 10_000,
         stopSignal: "SIGINT",
-      });
-      const startedAt = Date.now();
-      expect(await waitForFile(ready)).toBe(true);
-      const remainingBeforeDeadline = Math.max(
-        0,
-        9_000 - (Date.now() - startedAt),
-      );
-      await new Promise((resolve) =>
-        setTimeout(resolve, remainingBeforeDeadline),
-      );
-      controller.abort();
-
-      await expect(execution).rejects.toMatchObject({ name: "AbortError" });
+      }).catch((cause: unknown) => cause);
+      try {
+        expect(await waitForFile(ready)).toBe(true);
+        await vi.advanceTimersByTimeAsync(9_000);
+        controller.abort();
+        expect(await waitForFile(interrupted)).toBe(true);
+        await vi.advanceTimersByTimeAsync(1_000);
+        await vi.advanceTimersByTimeAsync(4_000);
+        expect(await execution).toMatchObject({ name: "AbortError" });
+      } finally {
+        controller.abort();
+        await vi.runAllTimersAsync();
+        vi.useRealTimers();
+        await execution;
+      }
     },
   );
 
@@ -391,17 +416,22 @@ describe.skipIf(process.platform === "win32")(
         `fs.writeFileSync(${JSON.stringify(ready)}, "");`,
         "setInterval(() => {}, 1000);",
       ].join("\n");
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const execution = execFileOutput(process.execPath, ["-e", script], {
+        timeout: 10_000,
+        stopSignal: "SIGINT",
+      }).catch((cause: unknown) => cause);
       try {
-        const execution = execFileOutput(process.execPath, ["-e", script], {
-          timeout: 10_000,
-          stopSignal: "SIGINT",
-        });
         expect(await waitForFile(ready)).toBe(true);
-        await expect(execution).rejects.toMatchObject({
+        await vi.advanceTimersByTimeAsync(10_000);
+        expect(await execution).toMatchObject({
           code: "ETIMEDOUT",
           signal: null,
         });
       } finally {
+        await vi.runAllTimersAsync();
+        vi.useRealTimers();
+        await execution;
         await rm(directory, { recursive: true, force: true });
       }
     });
@@ -472,8 +502,10 @@ describe.skipIf(process.platform === "win32")(
       const release = join(directory, "release");
       const finished = join(directory, "finished.json");
       await mkdir(scratch);
+      // The stop signal reaches the whole group; this descendant outlives it.
       const childSource = [
         'const fs = require("node:fs");',
+        'process.on("SIGTERM", () => {});',
         `fs.writeFileSync(${JSON.stringify(ready)}, String(process.pid));`,
         "setInterval(() => {",
         `  if (!fs.existsSync(${JSON.stringify(release)})) return;`,
@@ -531,7 +563,7 @@ describe.skipIf(process.platform === "win32")(
         killFailure = await stopOwnedDescendant(pid, finished);
       }
       if (killFailure !== undefined) throw killFailure;
-    }, 15_000);
+    });
 
     it("keeps scratch files until an inherited-pipe descendant closes them", async () => {
       const directory = await createTestTempDirectory("rea-exec-inherited-");
@@ -605,6 +637,110 @@ describe.skipIf(process.platform === "win32")(
   },
 );
 
+describe.skipIf(process.platform === "win32")(
+  "execFileOutput process group",
+  () => {
+    it("stops a running launcher's descendants with it", async () => {
+      const directory = await createTestTempDirectory("rea-exec-group-stop-");
+      const ready = join(directory, "descendant.pid");
+      const marker = join(directory, "descendant-marker");
+      const childSource = [
+        'const fs = require("node:fs");',
+        `fs.writeFileSync(${JSON.stringify(ready)}, String(process.pid));`,
+        `setInterval(() => fs.existsSync(${JSON.stringify(marker)}), 10);`,
+      ].join("\n");
+      const script = [
+        'const { spawn } = require("node:child_process");',
+        `spawn(process.execPath, ["-e", ${JSON.stringify(childSource)}], { stdio: "inherit" });`,
+        "setInterval(() => {}, 1000);",
+      ].join("\n");
+      const controller = new AbortController();
+      const execution = execFileOutput(process.execPath, ["-e", script], {
+        stopSignal: "SIGTERM",
+        signal: controller.signal,
+      }).catch((cause: unknown) => cause);
+      let killFailure: unknown;
+      try {
+        expect(await waitForFile(ready)).toBe(true);
+        controller.abort("caller stopped");
+        let timer: NodeJS.Timeout | undefined;
+        const outcome = await Promise.race([
+          execution,
+          new Promise((resolve) => {
+            timer = setTimeout(
+              () => resolve("descendant kept the pipes"),
+              4_000,
+            );
+          }),
+        ]).finally(() => clearTimeout(timer));
+        expect(outcome).toMatchObject({
+          _tag: "ExecFileOutputCancelledError",
+          cause: "caller stopped",
+        });
+      } finally {
+        controller.abort("test cleanup");
+        const pid = Number(await readFile(ready, "utf8").catch(() => ""));
+        killFailure = await stopOwnedDescendant(pid, marker);
+        await execution;
+      }
+      if (killFailure !== undefined) throw killFailure;
+    });
+
+    it("escalates to the group when the launcher and its worker ignore the stop signal", async () => {
+      const directory = await createTestTempDirectory(
+        "rea-exec-group-escalate-",
+      );
+      const ready = join(directory, "descendant.pid");
+      const marker = join(directory, "descendant-marker");
+      const ignoreStop =
+        'process.on("SIGTERM", () => {}); setInterval(() => {}, 1000);';
+      const childSource = [
+        'const fs = require("node:fs");',
+        ignoreStop,
+        `fs.writeFileSync(${JSON.stringify(ready)}, String(process.pid));`,
+        `setInterval(() => fs.existsSync(${JSON.stringify(marker)}), 10);`,
+      ].join("\n");
+      const script = [
+        'const { spawn } = require("node:child_process");',
+        ignoreStop,
+        `spawn(process.execPath, ["-e", ${JSON.stringify(childSource)}], { stdio: "inherit" });`,
+      ].join("\n");
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const controller = new AbortController();
+      const execution = execFileOutput(process.execPath, ["-e", script], {
+        stopSignal: "SIGTERM",
+        signal: controller.signal,
+      }).catch((cause: unknown) => cause);
+      let killFailure: unknown;
+      try {
+        expect(await waitForFile(ready)).toBe(true);
+        controller.abort("caller stopped");
+        // Both processes ignore SIGTERM; only the grace SIGKILL ends them.
+        await vi.advanceTimersByTimeAsync(5_000);
+        vi.useRealTimers();
+        let timer: NodeJS.Timeout | undefined;
+        const outcome = await Promise.race([
+          execution,
+          new Promise((resolve) => {
+            timer = setTimeout(() => resolve("worker kept the pipes"), 4_000);
+          }),
+        ]).finally(() => clearTimeout(timer));
+        expect(outcome).toMatchObject({
+          _tag: "ExecFileOutputCancelledError",
+          cause: "caller stopped",
+        });
+      } finally {
+        vi.useRealTimers();
+        controller.abort("test cleanup");
+        const pid = Number(await readFile(ready, "utf8").catch(() => ""));
+        killFailure = await stopOwnedDescendant(pid, marker);
+        await execution;
+      }
+      if (killFailure !== undefined) throw killFailure;
+    });
+  },
+);
+
 describe("execFileOutput failure metadata", () => {
   it("preserves raw byte counts on a failed command with invalid UTF-8", async () => {
     const failure: unknown = await execFileOutput(process.execPath, [
@@ -623,6 +759,85 @@ describe("execFileOutput failure metadata", () => {
       code: 7,
     });
   });
+  // Without stopSignal the command takes Node's execFile; adb always passes
+  // one and takes the owned spawn route. Both throw ENOTDIR synchronously.
+  it.skipIf(process.platform === "win32").each([
+    { route: "execFile", options: {} },
+    { route: "spawn", options: { stopSignal: "SIGTERM" as const } },
+  ])(
+    "admits a synchronously thrown spawn error through $route with its code and empty capture",
+    async ({ options }) => {
+      const root = await createTestTempDirectory("rea-exec-enotdir-");
+      const file = join(root, "regular");
+      await writeFile(file, "");
+      const failure: unknown = await execFileOutput(
+        join(file, "adb"),
+        ["version"],
+        options,
+      ).then(
+        () => undefined,
+        (cause: unknown) => cause,
+      );
+
+      expect(failure).toMatchObject({ code: "ENOTDIR", syscall: "spawn" });
+      expect(execFileOutputFailure(failure)).toEqual({
+        stdout: "",
+        stderr: "",
+        stdoutBytes: 0,
+        stderrBytes: 0,
+        code: "ENOTDIR",
+        signal: null,
+        killed: false,
+        outputTruncated: false,
+        spawnFailed: true,
+      });
+    },
+  );
+
+  it("marks an asynchronous spawn failure but not a started process's exit", async () => {
+    const root = await createTestTempDirectory("rea-exec-spawn-owner-");
+    const missing = join(root, "missing");
+    const spawnFailure: unknown = await execFileOutput(missing, [
+      "version",
+    ]).then(
+      () => undefined,
+      (cause: unknown) => cause,
+    );
+    expect(spawnFailure).toMatchObject({
+      code: "ENOENT",
+      path: missing,
+      spawnargs: ["version"],
+    });
+    expect(execFileOutputFailure(spawnFailure)).toMatchObject({
+      code: "ENOENT",
+      spawnFailed: true,
+    });
+
+    const exitFailure: unknown = await execFileOutput(process.execPath, [
+      "-e",
+      "process.exitCode = 3",
+    ]).then(
+      () => undefined,
+      (cause: unknown) => cause,
+    );
+    expect(execFileOutputFailure(exitFailure)).toMatchObject({ code: 3 });
+    expect(execFileOutputFailure(exitFailure)).not.toHaveProperty(
+      "spawnFailed",
+    );
+  });
+
+  it("leaves a synchronous argument validation error unadmitted", async () => {
+    const failure: unknown = await execFileOutput(process.execPath, [
+      "nul\0byte",
+    ]).then(
+      () => undefined,
+      (cause: unknown) => cause,
+    );
+
+    expect(failure).toMatchObject({ code: "ERR_INVALID_ARG_VALUE" });
+    expect(execFileOutputFailure(failure)).toBeUndefined();
+  });
+
   it("preserves explicit truncation metadata from an owned process failure", () => {
     const failure = Object.assign(new Error("owned output was truncated"), {
       stdout: "partial stdout",

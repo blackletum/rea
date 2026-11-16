@@ -1,3 +1,4 @@
+import { canonicalOutputSchema } from "../../fixtures/canonicalOutputSchema.js";
 import { parseEvidence } from "../../../src/domain/evidence.js";
 import { digestCanonicalValue } from "../../../src/domain/canonicalDigest.js";
 import { electronActiveObservationInputSchema } from "../../../src/domain/javascript/electronActiveObservation.js";
@@ -118,7 +119,7 @@ it("records completed Electron facts after final detach as server Evidence", asy
       file_path: "/tmp/index.html",
       attached: true,
     },
-    ...emptyElectronPageCoverage(1),
+    ...emptyElectronPageCoverage(0),
   };
   const provider: ElectronObservationPort = {
     identity: () => ({
@@ -343,7 +344,7 @@ it("exposes endpoint-scoped Electron discovery and inspection as Evidence", asyn
       isolation: "none",
     },
     limitations: expect.arrayContaining([
-      "Browser host platform and architecture were not observed.",
+      expect.stringMatching(/platform.*architecture.*not observed/iu),
     ]),
     normalized_result: {
       targets: [{ target_id: "electron-page" }],
@@ -400,12 +401,12 @@ it("exposes endpoint-scoped Electron discovery and inspection as Evidence", asyn
   expect(inspected.isError).not.toBe(true);
   expect(inspected.structuredContent).toMatchObject({
     normalized_result: {
-      target: { file_path: expect.stringMatching(/[\\/]index\.html$/u) },
+      target: { file_path: join(root, "index.html") },
       scripts: {
         items: [
           expect.objectContaining({
             frame_id: "frame-main",
-            file_path: expect.stringMatching(/[\\/]app\.js$/u),
+            file_path: join(root, "app.js"),
             cdp_hash: null,
             length: null,
             is_module: null,
@@ -416,12 +417,12 @@ it("exposes endpoint-scoped Electron discovery and inspection as Evidence", asyn
         expect.objectContaining({
           target_id: "electron-worker",
           opener_target_id: "electron-page",
-          file_path: expect.stringMatching(/[\\/]worker\.js$/u),
+          file_path: join(root, "worker.js"),
         }),
       ],
     },
   });
-}, 20_000);
+});
 
 /** Create the selected-path aliases and retained IPC-gap capture for the public workflow. */
 const activeElectronScenarioFixture = async () => {
@@ -489,6 +490,10 @@ it("runs active Electron scenarios with selected paths and inferred working dire
     { kind: "session", session },
     {
       electronActiveObservation: provider,
+      environment: {
+        ...process.env,
+        REA_MCP_TOOL_FAMILIES: "electron",
+      },
       availabilityPolicy: () => ({
         processCaptureEnabled: false,
         investigationInputRoots: 0,
@@ -505,12 +510,12 @@ it("runs active Electron scenarios with selected paths and inferred working dire
   const advertised = (await client.listTools()).tools.find(
     ({ name }) => name === "capture_electron_scenario",
   );
-  if (advertised?.outputSchema === undefined)
+  if (advertised === undefined)
     throw new Error("Active Electron output schema was not advertised");
   const validateOutput = new Ajv2020({
     strict: false,
     validateFormats: false,
-  }).compile(z.record(z.string(), z.unknown()).parse(advertised.outputSchema));
+  }).compile(canonicalOutputSchema(advertised.name));
   const captured = await client.callTool({
     name: "capture_electron_scenario",
     arguments: {
@@ -610,7 +615,7 @@ it("runs active Electron scenarios with selected paths and inferred working dire
       ],
     },
   });
-}, 20_000);
+});
 
 it("exposes the target-free static JavaScript application workflow", async () => {
   const root = await createTestTempDirectory("rea-electron-static-mcp-");
@@ -684,7 +689,7 @@ it("exposes the target-free static JavaScript application workflow", async () =>
     })
     .parse(analyzed.structuredContent);
   expect(projected.normalized_result).toMatchObject({
-    input_path: expect.stringMatching(/rea-electron-static-mcp-/u),
+    input_path: root,
     summary: {
       browser_windows: 3,
       context_bridge_apis: 2,
@@ -849,10 +854,18 @@ it.skipIf(process.platform === "win32")(
     );
     await symlink("application/child", join(root, "link"));
     const capture = vi.fn<ElectronActiveObservationPort["capture"]>(
-      async (input) =>
-        resultOk(
-          createElectronActiveObservationFixtureResult(input.application_path),
-        ),
+      async (input) => {
+        const report = createElectronActiveObservationFixtureResult(
+          input.application_path,
+        );
+        return resultOk({
+          ...report,
+          application: {
+            ...report.application,
+            executable_path: input.executable_path,
+          },
+        });
+      },
     );
     const client = await activePathAdmissionClient(capture);
     const selected = {

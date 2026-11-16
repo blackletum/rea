@@ -57,7 +57,7 @@ const verifierFixture = async (provider: Provider) => {
 
   if (provider === "frida") {
     await mkdir(join(root, "dist", "frida"));
-    await mkdir(join(root, "dist", "contracts"));
+    await mkdir(join(root, "dist", "domain"));
     await writeFile(
       join(root, "dist", "frida", "FridaInstrumentationManager.js"),
       `import { appendFile } from "node:fs/promises";
@@ -88,9 +88,9 @@ export class FridaInstrumentationManager {
 }
 `,
     );
-    await writeFile(
-      join(root, "dist", "contracts", "fridaRemoteAddress.js"),
-      "export const isValidFridaRemoteAddress = () => false;\n",
+    await copyFile(
+      new URL("../../../dist/domain/fridaRemoteAddress.js", import.meta.url),
+      join(root, "dist", "domain", "fridaRemoteAddress.js"),
     );
   } else {
     await mkdir(join(root, "dist", "composition"));
@@ -149,7 +149,6 @@ processTest.for(cases)(
           REA_TEST_VERIFIER_CLOSE_FAIL: closeFails ? "1" : "0",
           REA_TEST_VERIFIER_CLOSE_LOG: fixture.closeLog,
         },
-        timeoutMs: 10_000,
       },
     );
 

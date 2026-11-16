@@ -512,9 +512,13 @@ cliTest.for(cases.filter(({ name }) => cliCaseNames.has(name)))(
         ),
       ),
     );
-    const response = await cli.run({
+    const invocation = {
       arguments: ["compare-web-captures", ...paths, "--json"],
       environment: { REA_LOG_LEVEL: "silent" },
+    };
+    const response = await cli.run({
+      ...invocation,
+      freshProcess: scenario.name === "heterogeneous HTTP omission 0",
     });
     expect(response.exitCode, response.stderr).toBe(0);
     expectComparison(response.json, scenario);

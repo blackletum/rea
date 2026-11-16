@@ -104,9 +104,7 @@ it.each(["absent", "valid", "uninterpretable"] as const)(
         expect(entries[0]?.limitations).toEqual(
           mode === "valid"
             ? []
-            : [
-                "Slice range was derived from structural Mach-O facts because lipo omitted it.",
-              ],
+            : [expect.stringMatching(/structural Mach.O.*lipo.*omitted/iu)],
         );
       }
     } finally {
@@ -133,7 +131,7 @@ it("does not replace a parsed contradictory lipo range with structural fallback"
       reader.entries()[Symbol.asyncIterator]().next(),
     ).rejects.toMatchObject({
       reason: "integrity",
-      message: expect.stringContaining("disagrees with the Mach-O FAT table"),
+      integrityCheck: "layout-consistency",
     });
   } finally {
     await reader.close();
@@ -169,7 +167,6 @@ it("refuses retained raw-field expansion as capacity rather than a malformed lip
     "list_architectures",
     path,
   );
-  expect(refused.ok).toBe(false);
   if (refused.ok) throw new Error("Expected lipo field retention refusal");
   expect(refused.error).toMatchObject({
     _tag: "AnalysisResourceConstraintError",

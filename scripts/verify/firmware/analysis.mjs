@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import * as fs from "node:fs/promises";
-import { tmpdir } from "node:os";
 import * as nodePath from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
@@ -12,9 +11,9 @@ import { parseEvidence } from "../../../dist/domain/evidence.js";
 import { ArtifactResourceScope } from "../../../dist/artifacts/ArtifactResourceScope.js";
 import { hashVerifierFile } from "../../lib/verifier-file-resources.mjs";
 import {
-  closeVerifierResources,
-  withVerifierCleanup,
-} from "../../lib/verifier-cleanup.mjs";
+  VerifierFixture,
+  withVerifierFixture,
+} from "../../lib/verifier-fixture.mjs";
 
 const execFileAsync = promisify(execFile);
 const { join, resolve, dirname } = nodePath;
@@ -49,7 +48,7 @@ async function checkPrerequisites() {
     const value = process.env[name];
     if (value === undefined) {
       throw new Error(
-        `verify:firmware requires ${name}; see docs/firmware-analysis.md`,
+        `verify:firmware requires ${name}; see docs/guides/firmware/firmware-analysis.md`,
       );
     }
     await fs.access(value);
@@ -86,7 +85,10 @@ const oracle = JSON.parse(
 const firmwarePath = join(FIXTURE_ROOT, "firmware.bin");
 const fileResources = new ArtifactResourceScope();
 
-const workDir = await fs.mkdtemp(join(tmpdir(), "rea-real-firmware-"));
+const workFixture = await VerifierFixture.open({
+  prefix: "rea-real-firmware-",
+});
+const workDir = workFixture.path;
 const baseEnv = Object.fromEntries(
   Object.entries(process.env).filter(([, v]) => v !== undefined),
 );
@@ -341,7 +343,7 @@ async function stageExt4() {
 async function stageGhidra(mcpFiles) {
   if (process.env.GHIDRA_INSTALL_DIR === undefined) {
     throw new Error(
-      "Firmware Ghidra handoff requires GHIDRA_INSTALL_DIR and Java; see docs/ghidra.md",
+      "Firmware Ghidra handoff requires GHIDRA_INSTALL_DIR and Java; see docs/providers/ghidra-provider.md",
     );
   }
 
@@ -380,7 +382,11 @@ async function stageGhidra(mcpFiles) {
 // Entry point
 // ---------------------------------------------------------------------------
 
-await withVerifierCleanup(async () => {
+// The MCP server and open file handles may still use files under the work
+// directory: each confirms cleanup before the root is removed.
+workFixture.releaseAfter(() => mcpClient.close());
+workFixture.releaseAfter(() => fileResources.close());
+await withVerifierFixture(workFixture, async () => {
   assert.equal(
     (await hashVerifierFile(firmwarePath, fileResources)).sha256,
     oracle.sha256,
@@ -398,12 +404,4 @@ await withVerifierCleanup(async () => {
     oracle.sha256,
     "Original firmware bytes must remain unchanged",
   );
-}, [
-  async () => {
-    await closeVerifierResources([
-      () => mcpClient.close(),
-      () => fileResources.close(),
-    ]);
-    await fs.rm(workDir, { recursive: true, force: true });
-  },
-]);
+});

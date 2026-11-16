@@ -46,6 +46,52 @@ it("accepts and replaces caller path metadata for the same semantic record", () 
   );
 });
 
+it("replaces auxiliary caller spelling on duplicate import and ignores record key order", () => {
+  const original = createEvidence(TARGET, PROVIDER, {
+    operation: "health",
+    parameters: {},
+    result: true,
+  });
+  const first = withEvidenceCallerInputPath(original, "./same-schema", {
+    operations_path: "./queries",
+    other: "./unchanged",
+  });
+  const second = withEvidenceCallerInputPath(original, "./same-schema", {
+    other: "./unchanged",
+    operations_path: "./alias/../queries",
+  });
+  const ledger = new EvidenceLedger();
+  expect(ledger.record(first).ok).toBe(true);
+  expect(second.evidence_id).toBe(first.evidence_id);
+  const imported = ledger.import(createEvidenceBundle([second]));
+  expect(imported).toMatchObject({
+    ok: true,
+    value: {
+      recordsAdded: 0,
+      changed: true,
+      replacements: [{ kind: "metadata" }],
+    },
+  });
+  expect(ledger.get(first.evidence_id)?.caller_input_paths).toEqual(
+    second.caller_input_paths,
+  );
+  expect(first.caller_input_paths?.operations_path).toBe("./queries");
+  const reordered = withEvidenceCallerInputPath(original, "./same-schema", {
+    operations_path: "./alias/../queries",
+    other: "./unchanged",
+  });
+  expect(ledger.import(createEvidenceBundle([reordered]))).toMatchObject({
+    ok: true,
+    value: { changed: false, replacements: [] },
+  });
+  const unannotated = withEvidenceCallerInputPath(original, "./same-schema");
+  expect(ledger.import(createEvidenceBundle([unannotated]))).toMatchObject({
+    ok: true,
+    value: { changed: true },
+  });
+  expect(ledger.get(first.evidence_id)?.caller_input_paths).toBeUndefined();
+});
+
 describe("evidence ledger recording", () => {
   it("deduplicates and atomically imports bundles", () => {
     const evidence = createEvidence(TARGET, PROVIDER, {
@@ -285,20 +331,23 @@ describe("evidence bundle imports", () => {
     const result = new EvidenceLedger().import(record);
     expect(result).toMatchObject({
       ok: false,
-      error: {
-        _tag: "AnalysisInputError",
-        userMessage: expect.stringContaining(
-          `this JSON is one Evidence record (${record.evidence_id})`,
-        ),
-      },
+      error: { _tag: "AnalysisInputError" },
     });
     if (result.ok) throw new Error("Expected a wrong-kind import failure");
     expect(projectAnalysisError(result.error)).toMatchObject({
       code: "invalid_request",
       category: "invalid_input",
-      message: expect.stringContaining(
-        `this JSON is one Evidence record (${record.evidence_id})`,
-      ),
+      message: expect.stringContaining(record.evidence_id),
+      details: {
+        operation: "import_evidence_bundle",
+        issues: [
+          {
+            path: [],
+            reason: "invalid_value",
+            observed: { detected_kind: "evidence-record" },
+          },
+        ],
+      },
     });
   });
 

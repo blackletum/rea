@@ -1,5 +1,5 @@
+import { decodeStrictUtf8 } from "../domain/strictUtf8.js";
 import { createHash } from "node:crypto";
-import { isAbsolute } from "node:path";
 
 import { z } from "zod";
 
@@ -13,11 +13,13 @@ import { publishWebScripts } from "../browser/assets/PublishWebScripts.js";
 import { selectScriptCapture } from "../browser/assets/ScriptCaptureAdapters.js";
 import {
   AnalysisAccessDeniedError,
-  AnalysisCancelledError,
   AnalysisInputError,
   AnalysisOutputError,
+  cancelledBy,
+  carriedReason,
 } from "../domain/analysisErrorCore.js";
 import { AnalysisError } from "../domain/analysisErrorBase.js";
+import { ConfigurationError } from "../domain/configurationErrors.js";
 import { createEvidence, type Evidence } from "../domain/evidence.js";
 import { analysisErrorWithCleanupFailure } from "../domain/analysisErrorCleanup.js";
 import { analysisInputErrorFromIssues } from "../domain/inputIssueProjection.js";
@@ -85,26 +87,9 @@ export const exportWebScriptsValidated = async (
   resources: ArtifactResourceScope,
   options: ExecutionOptions = {},
 ): Promise<Result<Evidence, AnalysisError>> => {
-  const invalidPaths = (["capture_path", "output_directory"] as const).filter(
-    (field) => !isAbsolute(input[field]),
-  );
-  if (invalidPaths.length > 0)
-    return err(
-      new AnalysisInputError(
-        OPERATION,
-        undefined,
-        invalidPaths.map((field) => ({
-          path: [field],
-          reason: "invalid_format" as const,
-          message: `${field} must be an absolute filesystem path on this host.`,
-        })),
-      ),
-    );
   try {
     if (options.signal?.aborted)
-      return err(
-        new AnalysisCancelledError(OPERATION, { cause: options.signal.reason }),
-      );
+      return err(cancelledBy(OPERATION, options.signal));
     const prepared = await prepareCapture(
       input.capture_path,
       resources,
@@ -113,9 +98,7 @@ export const exportWebScriptsValidated = async (
     if (!prepared.ok) return prepared;
     const { bytes, loaded } = prepared.value;
     if (options.signal?.aborted)
-      return err(
-        new AnalysisCancelledError(OPERATION, { cause: options.signal.reason }),
-      );
+      return err(cancelledBy(OPERATION, options.signal));
     const sha256 = createHash("sha256").update(bytes).digest("hex");
     const result = await publishWebScripts(input, loaded, sha256, {
       resources,
@@ -123,8 +106,7 @@ export const exportWebScriptsValidated = async (
     });
     if (options.signal?.aborted === true)
       return err(
-        new AnalysisCancelledError(OPERATION, {
-          cause: options.signal.reason,
+        cancelledBy(OPERATION, options.signal, {
           partialObservation: { kind: "web-script-export", result },
         }),
       );
@@ -205,8 +187,7 @@ const mapExportFailure = (
             cause.message,
             { cause, partialObservation: cause.partialObservation },
           )
-        : new AnalysisCancelledError(OPERATION, {
-            cause: cause.cancellation.reason,
+        : cancelledBy(OPERATION, carriedReason(cause.cancellation.reason), {
             partialObservation: cause.partialObservation,
           });
     if (cause.cleanup === undefined) return primary;
@@ -286,9 +267,10 @@ const readCapture = async (
             ? { reason: signal.reason }
             : regularFileCancellation(cause);
         if (cancellation !== undefined) {
-          const primary = new AnalysisCancelledError(OPERATION, {
-            cause: cancellation.reason,
-          });
+          const primary = cancelledBy(
+            OPERATION,
+            carriedReason(cancellation.reason),
+          );
           return err(
             retry.cleanup === undefined
               ? primary
@@ -319,9 +301,7 @@ const captureReadFailure = (
 ): AnalysisError => {
   const cancellation = regularFileCancellation(failure);
   if (cancellation !== undefined)
-    return new AnalysisCancelledError(OPERATION, {
-      cause: cancellation.reason,
-    });
+    return cancelledBy(OPERATION, carriedReason(cancellation.reason));
   const primary =
     failure instanceof RegularFileCleanupFailure &&
     failure.outcome.kind === "failed"
@@ -339,6 +319,16 @@ const captureReadFailure = (
           "Capture read and file-handle close both failed",
           { cause },
         );
+  if (cause instanceof ConfigurationError) {
+    if (closeFailure === undefined) return cause;
+    return new ConfigurationError(cause.message, {
+      cause: causeWithClose,
+      settings: cause.settings,
+      ...(cause.remediationAction === undefined
+        ? {}
+        : { remediationAction: cause.remediationAction }),
+    });
+  }
   const code =
     cause instanceof Error && "code" in cause ? String(cause.code) : "";
   if (code === "EACCES" || code === "EPERM")
@@ -407,10 +397,7 @@ const parseCapture = (
   closeFailure?: { readonly cause: unknown },
 ): Result<ReturnType<typeof selectScriptCapture>, AnalysisError> => {
   try {
-    const text = new TextDecoder("utf-8", {
-      fatal: true,
-      ignoreBOM: true,
-    }).decode(bytes);
+    const text = decodeStrictUtf8(bytes, "preserve");
     const json = safeParseJson(text);
     if (!json.ok) throw new TypeError(json.error);
     return ok(selectScriptCapture(json.value));

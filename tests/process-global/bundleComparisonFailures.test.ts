@@ -84,6 +84,7 @@ it.each(["missing", "invalid", "cleanup"])(
     expect(result.error.cleanupResources).toContain(rightPath);
     if (leftFailure === "cleanup")
       expect(result.error.cleanupResources).toContain(leftPath);
+    expect(owners.size).toBe(leftFailure === "cleanup" ? 2 : 1);
     expect([...owners].every((owner) => owner.handle.fd >= 0)).toBe(true);
 
     // Retry the exact leases carried through the combined failure, rather than
@@ -428,6 +429,7 @@ it.each([
     expect(JSON.parse(stdout)).toMatchObject({ code: "cancelled" });
     expect(process.exitCode).toBe(130);
     expect(process.listenerCount("SIGINT")).toBe(before);
+    expect(owners.size).toBeGreaterThan(0);
     expect([...owners].every((owner) => owner.handle.fd < 0)).toBe(true);
     expect(await readdir(directory)).toEqual(["bundle.json"]);
   } finally {
@@ -552,7 +554,7 @@ it.each(["before-commit", "after-commit", "cleanup-retry"])(
         });
         const loaded = await readEvidenceBundle(output);
         expect(loaded).toEqual({ ok: true, value: bundle });
-        expect(await readdir(directory)).toEqual([
+        expect((await readdir(directory)).sort()).toEqual([
           "bundle.json",
           "output.json",
         ]);
@@ -563,3 +565,22 @@ it.each(["before-commit", "after-commit", "cleanup-retry"])(
     }
   },
 );
+
+it("reports an unconfirmed read cleanup after a completed comparison as cleanup_incomplete", async () => {
+  const directory = await createTestTempDirectory("rea-bundle-close-failure-");
+  const { path, bundle } = await validBundleFile(directory);
+  const close = vi
+    .spyOn(ArtifactResourceScope.prototype, "close")
+    .mockRejectedValueOnce(new Error("injected scope close failure"));
+  onTestFinished(() => close.mockRestore());
+  const result = await compareEvidenceBundlesCommand({
+    leftPath: path,
+    rightPath: path,
+  });
+  if (result.ok) throw new Error("Expected an unconfirmed cleanup");
+  expect(result.error.cleanupIncomplete).toBe(true);
+  // The completed comparison stays with the cleanup failure.
+  expect(result.error.diagnostics).toMatchObject({
+    completed_result: bundleComparison.compareBundles(bundle, bundle),
+  });
+});

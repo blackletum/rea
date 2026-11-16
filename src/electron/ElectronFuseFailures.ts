@@ -1,3 +1,5 @@
+import { parseFailureAnalysisError } from "../domain/parseFailureAnalysisError.js";
+import { ELECTRON_FUSE_PROVIDER_IDENTITY } from "./ElectronFuseProviderIdentity.js";
 import { ArtifactReaderFailure } from "../artifacts/ArtifactReader.js";
 import {
   ArtifactFileCleanupFailure,
@@ -12,11 +14,11 @@ import { AnalysisError } from "../domain/analysisErrorBase.js";
 import {
   AnalysisAccessDeniedError,
   AnalysisArtifactChangedError,
-  AnalysisCancelledError,
   AnalysisInputError,
   AnalysisOutputError,
   AnalysisResourceConstraintError,
-  AnalysisUnsupportedTargetError,
+  cancelledBy,
+  carriedReason,
 } from "../domain/analysisErrorCore.js";
 import { fixedAllowanceOptions } from "../domain/fixedAllowanceRemediation.js";
 import { ProviderAdapterError } from "../domain/providerAdapterError.js";
@@ -26,17 +28,7 @@ import {
   NonRegularFileReadError,
 } from "../filesystem/RegularFile.js";
 import { ElectronFusePathFailure } from "./ElectronFusePath.js";
-import {
-  ElectronFuseFormatFailure,
-  ElectronFuseResourceFailure,
-} from "./ElectronFuseReader.js";
-
-/** Bundled fuse-wire reader. It does not flip fuses or launch the application. */
-export const ELECTRON_FUSE_PROVIDER_IDENTITY = {
-  id: "electron-fuses",
-  name: "REA Electron fuse reader",
-  version: "1",
-} as const;
+import { ElectronFuseResourceFailure } from "./ElectronFuseReader.js";
 
 const OPERATION = "inspect_electron_fuses";
 
@@ -63,9 +55,7 @@ export const electronFuseFailure = (
           ? electronFuseFailure(outcome.cause, path, operation)
           : cancellation === undefined
             ? undefined
-            : new AnalysisCancelledError(operation, {
-                cause: cancellation.reason,
-              });
+            : cancelledBy(operation, carriedReason(cancellation.reason));
       if (primary !== undefined)
         return analysisErrorWithCleanupFailure(
           primary,
@@ -76,14 +66,13 @@ export const electronFuseFailure = (
     return cleanup;
   }
   if (cause instanceof ArtifactReaderFailure && cause.reason === "cancelled")
-    return new AnalysisCancelledError(operation, {
-      cause: artifactFileCancellationCause(cause),
-    });
+    return cancelledBy(
+      operation,
+      carriedReason(artifactFileCancellationCause(cause)),
+    );
   const cancellation = regularFileCancellation(cause);
   if (cancellation !== undefined)
-    return new AnalysisCancelledError(operation, {
-      cause: cancellation.reason,
-    });
+    return cancelledBy(operation, carriedReason(cancellation.reason));
   if (cause instanceof ElectronFusePathFailure)
     return new AnalysisInputError(operation, { cause }, [
       { path: ["path"], reason: cause.reason, message: cause.message },
@@ -106,18 +95,8 @@ export const electronFuseFailure = (
         ),
       },
     );
-  if (cause instanceof ElectronFuseFormatFailure)
-    return cause.kind === "unsupported"
-      ? new AnalysisUnsupportedTargetError(operation, path, cause.message, {
-          cause,
-        })
-      : new AnalysisInputError(operation, { cause }, [
-          {
-            path: ["path"],
-            reason: "invalid_format",
-            message: `Selected artifact ${path}: ${cause.message}`,
-          },
-        ]);
+  const formatFailure = parseFailureAnalysisError(operation, path, cause);
+  if (formatFailure !== undefined) return formatFailure;
   if (cause instanceof RegularFileChangedError)
     return new AnalysisArtifactChangedError(operation, path, cause.message, {
       cause,

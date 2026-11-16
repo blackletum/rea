@@ -6,6 +6,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { mkdir, writeFile, rm, access, symlink } from "node:fs/promises";
 import { join } from "node:path";
 import { createTestTempDirectory } from "../../tests/fixtures/temporaryDirectory.js";
+import { awaitAcknowledgement } from "../../tests/fixtures/lifecycleAcknowledgement.js";
 import type {
   Browser,
   BrowserContext,
@@ -15,6 +16,7 @@ import type {
 
 import { DEFAULT_CDP_COMMAND_TIMEOUT_MS } from "../domain/browserDeadline.js";
 import { browserScenarioSchema } from "../domain/browserScenario.js";
+import { PLAYWRIGHT_CLEANUP_CONFIRMATION_TIMEOUT_MS } from "./PlaywrightExecutionBoundary.js";
 import { absoluteCallerPath } from "../filesystem/callerPath.js";
 import {
   attachedScenarioLeaseKey,
@@ -171,12 +173,181 @@ it("keeps Termux execution support when launching Chromium on Android", async ()
     diagnostics: { startup_error: "launch boundary reached" },
   });
 
-  expect(launchOptions?.args).toEqual(["--no-sandbox", "--single-process"]);
+  expect(launchOptions?.chromiumSandbox).toBe(false);
+  expect(launchOptions?.args).toEqual(["--single-process"]);
   expect(launchOptions?.env).toEqual({
     LANG: "selected-language",
     LD_PRELOAD: "/data/data/com.termux/files/usr/lib/libtermux-exec.so",
     TERMUX_EXEC__PROC_SELF_EXE: process.execPath,
   });
+});
+
+const launchScenario = browserScenarioSchema.parse({
+  browser: { mode: "launch", executable_path: process.execPath },
+  start_url: { url: "https://example.test" },
+  actions: [{ step_id: "settle", action: "wait_for_timeout", duration_ms: 1 }],
+});
+
+it("does not launch a browser for an already-cancelled opening", async () => {
+  const controller = new AbortController();
+  const reason = { caller: "cancelled before browser acquisition" };
+  controller.abort(reason);
+  const launch = vi.fn(async () => {
+    throw new Error("unexpected launch after cancellation");
+  });
+  await expect(
+    openPlaywrightScenarioBrowser(
+      launchScenario,
+      {},
+      {
+        signal: controller.signal,
+        launcher: {
+          launchPersistentContext: launch,
+          connectOverCDP: async () => {
+            throw new Error("Unexpected connection");
+          },
+        },
+      },
+    ),
+  ).rejects.toMatchObject({ reason: "cancelled", cause: reason });
+  expect(launch).not.toHaveBeenCalled();
+});
+
+it.each([false, true])(
+  "admits a late launch only while its caller is active (cancelled: %s)",
+  async (cancelled) => {
+    const controller = new AbortController();
+    const reason = { caller: "cancelled during browser launch" };
+    const started = deferred<void>();
+    const launched = deferred<BrowserContext>();
+    let profile = "";
+    const close = vi.fn(async () => undefined);
+    const newPage = vi.fn(async () => ({}) as Page);
+    const opening = openPlaywrightScenarioBrowser(
+      launchScenario,
+      {},
+      {
+        signal: controller.signal,
+        launcher: {
+          launchPersistentContext: (directory) => {
+            profile = directory;
+            started.resolve(undefined);
+            return launched.promise;
+          },
+          connectOverCDP: async () => {
+            throw new Error("Unexpected connection");
+          },
+        },
+      },
+    ).then(
+      (value) => ({ ok: true as const, value }),
+      (cause: unknown) => ({ ok: false as const, cause }),
+    );
+    const context = {
+      close,
+      browser: () => ({}) as Browser,
+      pages: () => [],
+      newPage,
+    } as unknown as BrowserContext;
+    try {
+      await awaitAcknowledgement(started.promise, opening, "browser launch");
+      if (cancelled) controller.abort(reason);
+      launched.resolve(context);
+      const result = await opening;
+      if (result.ok) {
+        try {
+          expect(cancelled).toBe(false);
+          expect(newPage).toHaveBeenCalledOnce();
+          expect(close).not.toHaveBeenCalled();
+          expect(result.value.profilePath).toBe(profile);
+        } finally {
+          await result.value.cleanup.close();
+        }
+      } else {
+        expect(cancelled).toBe(true);
+        expect(result.cause).toMatchObject({ reason: "cancelled" });
+        if (!(result.cause instanceof AnalysisError))
+          throw new Error("Expected typed cancellation");
+        expect(result.cause.cause).toBe(reason);
+        expect(newPage).not.toHaveBeenCalled();
+      }
+      expect(close).toHaveBeenCalledOnce();
+      await expect(access(profile)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      controller.abort(reason);
+      launched.resolve(context);
+      const outcome = await opening;
+      if (outcome.ok) await outcome.value.cleanup.close();
+    }
+  },
+);
+
+it.each([
+  { environment: {}, sandbox: true },
+  { environment: { REA_BROWSER_NO_SANDBOX: "false" }, sandbox: true },
+  { environment: { REA_BROWSER_NO_SANDBOX: "1" }, sandbox: true },
+  { environment: { REA_BROWSER_NO_SANDBOX: "true" }, sandbox: false },
+])(
+  "launches Chromium with sandbox $sandbox for $environment",
+  async ({ environment, sandbox }) => {
+    Object.defineProperty(process, "platform", { value: "linux" });
+    let launchOptions: Parameters<
+      typeof import("playwright-core").chromium.launchPersistentContext
+    >[1];
+
+    await expect(
+      openPlaywrightScenarioBrowser(launchScenario, environment, {
+        launcher: {
+          connectOverCDP: async () => {
+            throw new Error("Unexpected connection");
+          },
+          launchPersistentContext: async (_profile, options) => {
+            launchOptions = options;
+            throw new Error("launch boundary reached");
+          },
+        },
+      }),
+    ).rejects.toMatchObject({
+      diagnostics: { startup_error: "launch boundary reached" },
+      // Chromium's startup log, not REA, says whether the sandbox caused it.
+      remediationAction: sandbox
+        ? expect.stringContaining("REA_BROWSER_NO_SANDBOX=true")
+        : "Review the selected executable and startup diagnostics, then correct the launch configuration before retrying.",
+    });
+
+    expect(launchOptions?.chromiumSandbox).toBe(sandbox);
+    expect(launchOptions?.args).toEqual([]);
+    expect(launchOptions?.env).toEqual({});
+  },
+);
+
+it("waits for bounded event finalization and owned browser teardown", async () => {
+  vi.useFakeTimers();
+  try {
+    const closeBrowser = vi.fn(
+      () => new Promise<void>((resolve) => setTimeout(resolve, 1_500)),
+    );
+    const removeProfile = vi.fn(async () => undefined);
+    const cleanup = new PlaywrightScenarioBrowserCleanupOwner({
+      closeBrowser,
+      removeProfile,
+    });
+    const finished = cleanup
+      .close(() => new Promise<void>((resolve) => setTimeout(resolve, 4_500)))
+      .then(
+        () => ({ ok: true }),
+        (cause: unknown) => ({ ok: false, cause }),
+      );
+    await vi.advanceTimersByTimeAsync(4_500);
+    expect(removeProfile).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1_500);
+    expect(await finished).toEqual({ ok: true });
+    expect(cleanup.browserClosed).toBe(true);
+    expect(closeBrowser).toHaveBeenCalledOnce();
+    expect(removeProfile).toHaveBeenCalledOnce();
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 it("keeps attached-target ownership after the cleanup response timeout", async () => {
@@ -209,7 +380,9 @@ it("keeps attached-target ownership after the cleanup response timeout", async (
         responseSettled = true;
       })
       .catch(() => {});
-    await vi.advanceTimersByTimeAsync(29_999);
+    await vi.advanceTimersByTimeAsync(
+      PLAYWRIGHT_CLEANUP_CONFIRMATION_TIMEOUT_MS - 1,
+    );
     expect(responseSettled).toBe(false);
     await vi.advanceTimersByTimeAsync(1);
     await timeoutExpectation;
@@ -264,16 +437,27 @@ it("does not configure a late attached connection after cancellation", async () 
       signal: controller.signal,
     },
   );
-  await connectionStarted.promise;
-  controller.abort();
-  connection.resolve(connectedBrowser);
+  try {
+    await awaitAcknowledgement(
+      connectionStarted.promise,
+      opening,
+      "CDP connection",
+    );
+    controller.abort();
+    connection.resolve(connectedBrowser);
 
-  await expect(opening).rejects.toMatchObject({
-    _tag: "BrowserObservationError",
-    reason: "cancelled",
-  });
-  expect(connectedBrowser.contexts).not.toHaveBeenCalled();
-  expect(connectedBrowser.close).toHaveBeenCalledOnce();
+    await expect(opening).rejects.toMatchObject({
+      _tag: "BrowserObservationError",
+      reason: "cancelled",
+    });
+    expect(connectedBrowser.contexts).not.toHaveBeenCalled();
+    expect(connectedBrowser.close).toHaveBeenCalledOnce();
+  } finally {
+    controller.abort();
+    connection.resolve(connectedBrowser);
+    const opened = await opening.catch(() => undefined);
+    await opened?.cleanup.close();
+  }
 });
 
 it("closes an attached connection when cancellation starts target discovery", async () => {
@@ -336,7 +520,11 @@ const attachedBrowserFixture = (
     detach: vi.fn(async () => undefined),
   } as unknown as CDPSession;
   const environmentSession = {
-    send: vi.fn(callbacks.send ?? (async () => undefined)),
+    // Chromium acknowledges an Emulation command with an empty result object.
+    send: vi.fn(
+      async (method: string, parameters?: unknown) =>
+        (await callbacks.send?.(method, parameters)) ?? {},
+    ),
     detach: vi.fn(callbacks.detach ?? (async () => undefined)),
   } as unknown as CDPSession;
   const page = {
@@ -438,6 +626,7 @@ it("restores its environment overrides before releasing an attached browser", as
   );
   expect(fixture.environmentSession.send).toHaveBeenCalledWith(
     "Emulation.clearDeviceMetricsOverride",
+    undefined,
   );
   expect(fixture.page.emulateMedia).toHaveBeenLastCalledWith({
     colorScheme: null,
@@ -487,10 +676,19 @@ it("checks a late stop after attached restoration and before transport disconnec
     },
   });
 
-  await restorationStarted.promise;
-  revision += 1;
-  finishRestoration.resolve(undefined);
-  await release;
+  try {
+    await awaitAcknowledgement(
+      restorationStarted.promise,
+      release,
+      "browser restoration",
+    );
+    revision += 1;
+    finishRestoration.resolve(undefined);
+    await release;
+  } finally {
+    finishRestoration.resolve(undefined);
+    await release.catch(() => undefined);
+  }
 
   expect(order).toEqual([
     "restore-started",
@@ -553,9 +751,32 @@ it("does not clear an attached environment override it failed to acquire", async
   );
   expect(fixture.environmentSession.send).toHaveBeenCalledWith(
     "Emulation.clearDeviceMetricsOverride",
+    undefined,
   );
   expect(fixture.environmentSession.detach).toHaveBeenCalledOnce();
   expect(fixture.browser.close).toHaveBeenCalledOnce();
+});
+
+it("restores an attached environment override whose success reply is malformed", async () => {
+  const fixture = attachedBrowserFixture({
+    send: async (method, parameters) => {
+      if (
+        method === "Emulation.setLocaleOverride" &&
+        (parameters as { locale?: string }).locale === "en-US"
+      )
+        return "applied";
+      return undefined;
+    },
+  });
+
+  await expect(fixture.open()).rejects.toMatchObject({
+    reason: "protocol_error",
+  });
+  expect(fixture.environmentSession.send).toHaveBeenCalledWith(
+    "Emulation.setLocaleOverride",
+    { locale: "" },
+  );
+  expect(fixture.environmentSession.detach).toHaveBeenCalledOnce();
 });
 
 it("waits for a cancelled environment mutation before restoring it", async () => {
@@ -574,25 +795,36 @@ it("waits for a cancelled environment mutation before restoring it", async () =>
   });
   const controller = new AbortController();
   const opening = fixture.open(controller.signal);
-  await localeStarted.promise;
-  const cancelled = expect(opening).rejects.toMatchObject({
-    _tag: "AnalysisCancelledError",
-  });
-  controller.abort();
-  await new Promise((resolve) => setImmediate(resolve));
-  expect(fixture.environmentSession.send).not.toHaveBeenCalledWith(
-    "Emulation.setLocaleOverride",
-    { locale: "" },
-  );
+  try {
+    await awaitAcknowledgement(
+      localeStarted.promise,
+      opening,
+      "locale mutation",
+    );
+    const cancelled = expect(opening).rejects.toMatchObject({
+      _tag: "AnalysisCancelledError",
+    });
+    controller.abort();
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(fixture.environmentSession.send).not.toHaveBeenCalledWith(
+      "Emulation.setLocaleOverride",
+      { locale: "" },
+    );
 
-  localeResult.resolve(undefined);
-  await cancelled;
-  expect(fixture.environmentSession.send).toHaveBeenCalledWith(
-    "Emulation.setLocaleOverride",
-    { locale: "" },
-  );
-  expect(fixture.environmentSession.detach).toHaveBeenCalledOnce();
-  expect(fixture.browser.close).toHaveBeenCalledOnce();
+    localeResult.resolve(undefined);
+    await cancelled;
+    expect(fixture.environmentSession.send).toHaveBeenCalledWith(
+      "Emulation.setLocaleOverride",
+      { locale: "" },
+    );
+    expect(fixture.environmentSession.detach).toHaveBeenCalledOnce();
+    expect(fixture.browser.close).toHaveBeenCalledOnce();
+  } finally {
+    controller.abort();
+    localeResult.resolve(undefined);
+    const opened = await opening.catch(() => undefined);
+    await opened?.cleanup.close();
+  }
 });
 
 it("releases cleanup ownership when the attached target is destroyed", async () => {
@@ -891,12 +1123,26 @@ it("rechecks the browser release gate after finalization changes its revision", 
     },
   );
 
-  await eventsStarted.promise;
-  finishEvents.resolve(undefined);
-  await gateStarted.promise;
-  revision += 1;
-  finishGate.resolve(undefined);
-  await release;
+  try {
+    await awaitAcknowledgement(
+      eventsStarted.promise,
+      release,
+      "browser event finalization",
+    );
+    finishEvents.resolve(undefined);
+    await awaitAcknowledgement(
+      gateStarted.promise,
+      release,
+      "browser release gate",
+    );
+    revision += 1;
+    finishGate.resolve(undefined);
+    await release;
+  } finally {
+    finishEvents.resolve(undefined);
+    finishGate.resolve(undefined);
+    await release.catch(() => undefined);
+  }
 
   expect(gateRuns).toEqual([0, 1]);
   expect(closeBrowser).toHaveBeenCalledTimes(1);
@@ -928,10 +1174,19 @@ it("runs the latest stop gate after attached restoration and before disconnect",
     },
   });
 
-  await restorationStarted.promise;
-  revision += 1;
-  finishRestoration.resolve(undefined);
-  await release;
+  try {
+    await awaitAcknowledgement(
+      restorationStarted.promise,
+      release,
+      "browser restoration",
+    );
+    revision += 1;
+    finishRestoration.resolve(undefined);
+    await release;
+  } finally {
+    finishRestoration.resolve(undefined);
+    await release.catch(() => undefined);
+  }
 
   expect(gateRevisions).toEqual([1]);
   expect(disconnected).toBe(true);
@@ -979,19 +1234,32 @@ it.each([false, true])(
       () => ({ ok: true as const }),
       (cause: unknown) => ({ ok: false as const, cause }),
     );
-    await gateStarted.promise;
-    if (changeRevision) revision += 1;
-    finishGate.resolve(undefined);
-    await expect(release).resolves.toEqual({ ok: false, cause: failure });
-    expect(closeBrowser).toHaveBeenCalledTimes(1);
-    expect(transportClosed).toBe(false);
-    expect(owner.browserClosed).toBe(false);
-    expect(owner.cleanupResources).toContain("browser_transport");
+    try {
+      await awaitAcknowledgement(
+        gateStarted.promise,
+        release,
+        "browser release gate",
+      );
+      if (changeRevision) revision += 1;
+      finishGate.resolve(undefined);
+      await expect(release).resolves.toEqual({ ok: false, cause: failure });
+      expect(closeBrowser).toHaveBeenCalledTimes(1);
+      expect(transportClosed).toBe(false);
+      expect(owner.browserClosed).toBe(false);
+      expect(owner.cleanupResources).toContain("browser_transport");
 
-    await owner.release(undefined, gate);
-    expect(closeBrowser).toHaveBeenCalledTimes(2);
-    expect(transportClosed).toBe(true);
-    expect(owner.browserClosed).toBe(true);
+      await owner.release(undefined, gate);
+      expect(closeBrowser).toHaveBeenCalledTimes(2);
+      expect(transportClosed).toBe(true);
+      expect(owner.browserClosed).toBe(true);
+    } finally {
+      finishGate.resolve(undefined);
+      try {
+        await release;
+      } finally {
+        await owner.close();
+      }
+    }
   },
 );
 
@@ -1140,7 +1408,11 @@ it("applies command_timeout_ms to the primary connect handshake when service wor
     (failure as { remediationAction?: string }).remediationAction,
   ).not.toContain("--command-timeout-ms");
   expect(timeout).toBe(50);
-  expect(performance.now() - started).toBeLessThan(2_000);
+  // The fake ignores Playwright's timeout; only REA's own 50 ms deadline can
+  // stop the handshake before the default it would otherwise wait for.
+  expect(performance.now() - started).toBeLessThan(
+    DEFAULT_CDP_COMMAND_TIMEOUT_MS,
+  );
 });
 
 it("applies command_timeout_ms to primary target lookup when service workers are allowed", async () => {
@@ -1191,7 +1463,10 @@ it("applies command_timeout_ms to primary target lookup when service workers are
     reason: "timeout",
     userMessage: expect.stringContaining("Target.getTargetInfo"),
   });
-  expect(performance.now() - started).toBeLessThan(2_000);
+  // A lookup bounded by the default instead of command_timeout_ms ends later.
+  expect(performance.now() - started).toBeLessThan(
+    DEFAULT_CDP_COMMAND_TIMEOUT_MS,
+  );
 });
 
 it("closes a context that launches after its deadline before removing the profile", async () => {
@@ -1242,8 +1517,17 @@ it("closes a context that launches after its deadline before removing the profil
 });
 
 it("closes a browser that connects after its deadline without waiting to report the timeout", async () => {
-  let closed = false;
-  const started = performance.now();
+  vi.useFakeTimers();
+  let releaseHandshake!: () => void;
+  const held = new Promise<void>((resolve) => {
+    releaseHandshake = resolve;
+  });
+  let handshakeEntered!: () => void;
+  const entered = new Promise<void>((resolve) => {
+    handshakeEntered = resolve;
+  });
+  const closed = vi.fn(async () => undefined);
+  const leases: AnalysisCleanupLease[] = [];
   const scenario = browserScenarioSchema.parse({
     browser: {
       mode: "connect",
@@ -1255,34 +1539,54 @@ it("closes a browser that connects after its deadline without waiting to report 
     command_timeout_ms: 40,
     actions: scenarioActions,
   });
-  await expect(
-    openPlaywrightScenarioBrowser(
-      scenario,
-      {},
-      {
-        launcher: {
-          connectOverCDP: async () => {
-            await new Promise((resolve) => setTimeout(resolve, 80));
-            return {
-              close: async () => {
-                closed = true;
-              },
-              contexts: () => [],
-              isConnected: () => true,
-              version: () => "late-connect",
-            };
-          },
-          launchPersistentContext: async () => {
-            throw new Error("Unexpected launch");
-          },
+  let settled = false;
+  const opening = openPlaywrightScenarioBrowser(
+    scenario,
+    {},
+    {
+      retainCleanup: (lease) => leases.push(lease),
+      launcher: {
+        connectOverCDP: async () => {
+          handshakeEntered();
+          await held;
+          return {
+            close: closed,
+            contexts: () => [],
+            isConnected: () => true,
+            version: () => "late-connect",
+          };
+        },
+        launchPersistentContext: async () => {
+          throw new Error("Unexpected launch");
         },
       },
-    ),
-  ).rejects.toMatchObject({ reason: "timeout" });
-  expect(performance.now() - started).toBeLessThan(2_000);
-  for (let attempt = 0; attempt < 50 && !closed; attempt += 1)
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  expect(closed).toBe(true);
+    },
+  )
+    .catch((error: unknown) => error)
+    .finally(() => {
+      settled = true;
+    });
+  try {
+    await entered;
+    await vi.advanceTimersByTimeAsync(40);
+    expect(settled).toBe(true);
+    expect(closed).not.toHaveBeenCalled();
+    expect(await opening).toMatchObject({ reason: "timeout" });
+    expect(leases).toHaveLength(1);
+    expect(leases[0]?.released).toBe(false);
+    releaseHandshake();
+    await leases[0]!.release();
+    expect(closed).toHaveBeenCalledTimes(1);
+    expect(leases[0]?.released).toBe(true);
+  } finally {
+    releaseHandshake();
+    try {
+      await opening;
+      await Promise.all(leases.map((lease) => lease.release()));
+    } finally {
+      vi.useRealTimers();
+    }
+  }
 });
 
 it.each(["media", "focus"] as const)(
@@ -1309,11 +1613,12 @@ it.each(["media", "focus"] as const)(
     const environmentSession = {
       send: vi.fn(
         async (method: string, parameters?: { enabled?: boolean }) => {
-          if (method !== "Emulation.setFocusEmulationEnabled") return;
+          if (method !== "Emulation.setFocusEmulationEnabled") return {};
           if (parameters?.enabled === false) {
             if (mutation === "focus") restored = true;
           } else if (mutation === "focus")
             await new Promise((resolve) => setTimeout(resolve, 80));
+          return {};
         },
       ),
       detach: vi.fn(async () => undefined),
@@ -1367,10 +1672,12 @@ it.each(["media", "focus"] as const)(
     if (mutation === "media")
       expect(environmentSession.send).not.toHaveBeenCalledWith(
         "Emulation.clearDeviceMetricsOverride",
+        undefined,
       );
     else
       expect(environmentSession.send).toHaveBeenCalledWith(
         "Emulation.clearDeviceMetricsOverride",
+        undefined,
       );
     expect(browser.close).toHaveBeenCalledOnce();
   },

@@ -1,3 +1,4 @@
+import { analysisErrorWithCancellation } from "../domain/analysisErrorCancellation.js";
 import {
   HopperRemoteError,
   HopperTimeoutError,
@@ -13,9 +14,10 @@ import {
   AnalysisAccessDeniedError,
   AnalysisArtifactChangedError,
   AnalysisResourceConstraintError,
-  resourceConstraintRecovery,
+  reattributedResourceConstraint,
   AnalysisOutputError,
   AnalysisTimeoutError,
+  cancelledBy,
 } from "../domain/analysisErrorCore.js";
 import { ProviderAdapterError } from "../domain/providerAdapterError.js";
 import { ProviderCleanupError } from "../domain/providerCleanupError.js";
@@ -48,18 +50,26 @@ export const analysisClientFailureContext = (
             : {}),
         }
       : undefined;
-  const diagnostics =
+  const attribute = (
+    recorded: Readonly<Record<string, JsonValue>> | undefined,
+  ): Readonly<Record<string, JsonValue>> | undefined =>
     providerRequest === undefined
-      ? cause.diagnostics
+      ? recorded
       : {
           provider_request: providerRequest,
-          ...(cause.diagnostics === undefined
-            ? {}
-            : { provider_diagnostics: cause.diagnostics }),
+          ...(recorded === undefined ? {} : { provider_diagnostics: recorded }),
         };
+  const diagnostics = attribute(cause.diagnostics);
+  const invocationDiagnostics =
+    cause.invocationDiagnostics === undefined
+      ? undefined
+      : attribute(cause.invocationDiagnostics);
   return {
     cause,
     ...(cause.limit === undefined ? {} : { limit: cause.limit }),
+    ...(cause.continuingCallerGuidance === undefined
+      ? {}
+      : { continuingCallerGuidance: cause.continuingCallerGuidance }),
     ...(cause.cleanupPrimary === undefined
       ? {}
       : {
@@ -76,6 +86,7 @@ export const analysisClientFailureContext = (
       ? {}
       : { capturedOutput: cause.capturedOutput }),
     ...(diagnostics === undefined ? {} : { diagnostics }),
+    ...(invocationDiagnostics === undefined ? {} : { invocationDiagnostics }),
     ...(cause.cleanupIncomplete
       ? {
           cleanup: {
@@ -192,6 +203,7 @@ export const analysisClientFailureForOperation = (
       ...(cause.remediationAction === undefined
         ? {}
         : { remediationAction: cause.remediationAction }),
+      ...(cause.limit === undefined ? {} : { limit: cause.limit }),
     });
   else if (cause instanceof AnalysisOutputError)
     result = new AnalysisOutputError(operation, cause.reason, {
@@ -204,12 +216,10 @@ export const analysisClientFailureForOperation = (
         ? {}
         : { remediationAction: cause.remediationAction }),
     });
-  else if (cause instanceof AnalysisCancelledError)
-    result = new AnalysisCancelledError(operation, {
-      ...context,
-      cause: cause.cause,
-    });
-  else if (cause instanceof AnalysisCapabilityUnavailableError)
+  else if (cause instanceof AnalysisCancelledError) {
+    const { cause: _wrapped, ...cancellationContext } = context;
+    result = cancelledBy(operation, cause, cancellationContext);
+  } else if (cause instanceof AnalysisCapabilityUnavailableError)
     result = new AnalysisCapabilityUnavailableError(
       cause.providerId,
       operation,
@@ -219,6 +229,18 @@ export const analysisClientFailureForOperation = (
         ...(cause.userMessage === undefined
           ? {}
           : { userMessage: cause.userMessage }),
+        ...(cause.remediationAction === undefined
+          ? {}
+          : { remediationAction: cause.remediationAction }),
+        ...(cause.fallbackRemediationAction === undefined
+          ? {}
+          : { fallbackRemediationAction: cause.fallbackRemediationAction }),
+        ...(cause.siblingOperations === undefined
+          ? {}
+          : { siblingOperations: cause.siblingOperations }),
+        ...(cause.siblingReasons === undefined
+          ? {}
+          : { siblingReasons: cause.siblingReasons }),
         retryable: cause.retryable,
       },
     );
@@ -234,16 +256,10 @@ export const analysisClientFailureForOperation = (
       operation,
       cause.path,
       cause.reason,
-      context,
+      { ...context, integrityCheck: cause.integrityCheck },
     );
   else if (cause instanceof AnalysisResourceConstraintError)
-    result = new AnalysisResourceConstraintError(
-      operation,
-      cause.resource,
-      cause.reason,
-      cause.reportedLimits,
-      { ...context, ...resourceConstraintRecovery(cause) },
-    );
+    result = reattributedResourceConstraint(operation, cause, context);
   else
     result = new ProviderAdapterError(providerId, operation, {
       ...context,
@@ -254,7 +270,19 @@ export const analysisClientFailureForOperation = (
         ? {}
         : { remediationAction: cause.remediationAction }),
     });
+  for (const secondary of cause.secondaryFailures) {
+    if (secondary instanceof AnalysisCancelledError)
+      result = analysisErrorWithCancellation(result, secondary);
+    else result.retainSecondaryFailure(secondary);
+  }
+  // The attributed error reads its source's cleanup: live resources while it
+  // is pending, otherwise the source's completed release with the resources
+  // kept as history.
   return cause.cleanupIncomplete
     ? result.bindCleanupDependencies([cause])
-    : result.resolveCleanup();
+    : result.bindCleanupReleaseClaim({
+        get cleanupReleased() {
+          return !cause.cleanupIncomplete;
+        },
+      });
 };

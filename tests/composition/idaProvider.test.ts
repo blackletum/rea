@@ -15,7 +15,7 @@ import { createEvidence } from "../../src/domain/evidence.js";
 import { createEvidenceBundle } from "../../src/domain/evidenceBundle.js";
 import { createAnalysisExecution } from "../../src/application/AnalysisProvider.js";
 import { EnhancedTools } from "../../src/application/EnhancedTools.js";
-import { IDA_PROVIDER_IDENTITY } from "../../src/ida/IdaProviderCapabilities.js";
+import { IDA_PROVIDER_IDENTITY } from "../../src/ida/IdaProviderMetadata.js";
 import { parseBinaryTarget } from "../../src/application/BinaryTargetResolver.js";
 import { fat } from "../../src/domain/binaryTarget.fixture.js";
 import { createTestTempDirectory } from "../fixtures/temporaryDirectory.js";
@@ -33,7 +33,10 @@ const reobservesExternallyMutableState = async (): Promise<void> => {
   const { root, target } = await createIdaTarget();
   roots.push(root);
   const path = join(root, "registration.json");
-  await writeFile(path, JSON.stringify({ command: "fixture" }));
+  await writeFile(
+    path,
+    JSON.stringify({ command: "fixture", protocol: "legacy" }),
+  );
   const config = parseConfig({ REA_IDA_MCP_CONFIG: path });
   if (!config.ok) throw config.error;
   const producer = new RecordingIdaMcp(target);
@@ -197,7 +200,10 @@ describe("IDA provider selection cancellation", () => {
     const second = await createIdaTarget();
     roots.push(first.root, second.root);
     const path = join(first.root, "registration.json");
-    await writeFile(path, JSON.stringify({ command: "first-server" }));
+    await writeFile(
+      path,
+      JSON.stringify({ command: "first-server", protocol: "legacy" }),
+    );
     const config = parseConfig({ REA_IDA_MCP_CONFIG: path });
     if (!config.ok) throw config.error;
     const factorySelections: string[] = [];
@@ -226,7 +232,10 @@ describe("IDA provider selection cancellation", () => {
       (await session.execute("procedure_pseudo_code", { procedure: "main" }))
         .ok,
     ).toBe(true);
-    await writeFile(path, JSON.stringify({ command: "replacement-server" }));
+    await writeFile(
+      path,
+      JSON.stringify({ command: "replacement-server", protocol: "legacy" }),
+    );
     cancelWhenPreviousCloses = true;
     const replacement = await session.open(second.target.path, {
       signal: controller.signal,
@@ -236,6 +245,8 @@ describe("IDA provider selection cancellation", () => {
       ok: false,
       error: { _tag: "AnalysisCancelledError", cause: cancellationReason },
     });
+    if (replacement.ok) throw new Error("Expected cancellation");
+    expect(replacement.error.cause).toBe(cancellationReason);
     expect(session.activeTarget()?.sha256).toBe(first.target.sha256);
     expect(
       (await session.execute("procedure_pseudo_code", { procedure: "main" }))
@@ -272,6 +283,8 @@ describe("IDA provider selection cancellation", () => {
       ok: false,
       error: { _tag: "AnalysisCancelledError", cause: reason },
     });
+    if (profile.ok) throw new Error("Expected cancellation");
+    expect(profile.error.cause).toBe(reason);
     expect(runCalls).toBe(0);
   });
 });
@@ -312,7 +325,10 @@ describe("IDA universal Mach-O target identity", () => {
   };
 
   it.each([
-    { profile: "legacy attached", registration: { command: "fixture" } },
+    {
+      profile: "legacy attached",
+      registration: { command: "fixture", protocol: "legacy" },
+    },
     {
       profile: "native attached",
       registration: {
@@ -359,7 +375,10 @@ describe("IDA binary_overview execution", () => {
     const { root, target } = await createIdaTarget();
     roots.push(root);
     const path = join(root, "registration.json");
-    await writeFile(path, JSON.stringify({ command: "fixture" }));
+    await writeFile(
+      path,
+      JSON.stringify({ command: "fixture", protocol: "legacy" }),
+    );
     const config = parseConfig({ REA_IDA_MCP_CONFIG: path });
     if (!config.ok) throw config.error;
     const producer = new RecordingIdaMcp(target);

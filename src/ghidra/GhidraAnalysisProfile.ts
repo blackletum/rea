@@ -9,14 +9,15 @@ import { createAnalysisProfile } from "../domain/analysisProfile.js";
 import type { GhidraLanguageOverride } from "../config/ghidraLanguageOverride.js";
 import type { BinaryTarget } from "../domain/binaryTargetTypes.js";
 import {
-  AnalysisCancelledError,
   AnalysisUnsupportedTargetError,
+  cancelledBy,
 } from "../domain/analysisErrorCore.js";
 import { ConfigurationError } from "../domain/configurationErrors.js";
 import { ProviderAdapterError } from "../domain/providerAdapterError.js";
 import type { AnalysisError } from "../domain/analysisErrorBase.js";
 import { err, ok, type Result } from "../domain/result.js";
 import { ghidraDisabledAnalyzerPreset } from "./GhidraDisabledAnalyzers.js";
+import { ghidraBridgeSourcesDigest } from "./GhidraBridgeSources.js";
 import type { GhidraInstallationInspection } from "./GhidraInstallation.js";
 import {
   isLegacyMipsAdmission,
@@ -48,27 +49,43 @@ import {
   NATIVE_AOT_MAX_REPORT_BYTES,
   NATIVE_AOT_MAX_SOURCE_BYTES,
   NATIVE_AOT_MAX_WORKING_MEMORY_BYTES,
-  NATIVE_AOT_MAX_WORK_UNITS,
+  NATIVE_AOT_BASE_WORK_UNITS,
+  NATIVE_AOT_WORK_UNITS_PER_SOURCE_BYTE,
   NATIVE_AOT_PROFILE_CONTRACT_REVISION,
 } from "../domain/native/nativeAotPe.js";
 
 /** Shared analysis commitments for raw and header-selected imports. */
-const sharedAnalysisSemantics = {
+const sharedAnalysisSemanticMarkers = {
   annotation_policy: "atomic-function-entry-metadata-v1",
-  load_image_observations: "source-mappings-entry-context-v2",
+  byte_search_boundary: "contiguous-eligible-initialized-blocks-v1",
+  load_image_observations: "source-mappings-entry-context-relocation-symbol-v3",
   function_body_evidence: "complete-inclusive-ranges-v1",
-  function_references: "complete-body-and-entry-reference-manager-v2",
-  call_relationship_coverage: "function-body-call-coverage-v5",
+  function_references: "complete-body-and-entry-reference-manager-v3",
+  call_relationship_coverage: "observed-call-inventory-and-discovery-v7",
   function_dossier_coverage: "observed-facets-and-call-relationships-v1",
+  native_value_flow_projection: "accepted-runtime-budgets-v1",
+  value_flow_effect_scope: "pcode-load-store-explicit-v1",
   string_inventory_evidence: "defined-data-coverage-v1",
+  inventory_search_projection: "provider-inventory-facts-v1",
+  data_type_observations: "bit-field-base-and-lookup-v1",
   location_resolution: "explicit-address-exact-entry-symbol-first-v3",
+  procedure_search: "primary-and-exact-entry-symbol-names-v1",
   procedure_file_offset_resolution:
     "address-first-unique-target-source-mapping-v2",
   instruction_flow_evidence: "decoded-return-pcode-v1",
-  instruction_status: "unlisted-address-without-decode-v1",
-  instruction_references: "exact-address-incoming-without-synthetic-entry-v2",
-  function_boundary_observations: "ghidra-function-boundary-limitations-v4",
+  instruction_status: "unlisted-and-containing-code-data-v3",
+  instruction_references: "exact-address-incoming-without-synthetic-entry-v3",
+  byte_search_coverage: "separate-loaded-overlays-v1",
+  function_boundary_observations: "ghidra-function-boundary-limitations-v5",
 } as const;
+/** Marker revisions plus the bridge sources that produce every Ghidra result. */
+const sharedAnalysisSemantics = () => ({
+  ...sharedAnalysisSemanticMarkers,
+  bridge_sources_sha256: ghidraBridgeSourcesDigest(),
+});
+const loaderRelocationSemantics = "volatile-unapplied-relocation-blocks-v1";
+// Read-only sessions record relocation limitations without marking blocks volatile.
+const readOnlyLoaderRelocationSemantics = "read-only-relocation-limitations-v1";
 
 /**
  * The processor language REA pins for this target, or undefined when Ghidra may
@@ -113,7 +130,7 @@ const binaryLoaderPolicy = (
   architecture: target.architecture,
   available_architectures: [...target.availableArchitectures].sort(),
   import_mode: "ephemeral-source-immutable",
-  ...sharedAnalysisSemantics,
+  ...sharedAnalysisSemantics(),
   no_return_repair:
     installation.platform === "win32"
       ? "disabled-windows-p0"
@@ -137,9 +154,7 @@ export const resolveGhidraAnalysisProfile = async (
   disabledAnalyzers?: readonly string[],
 ): Promise<Result<AnalysisProfileResolution, AnalysisError>> => {
   if (signal?.aborted === true)
-    return Promise.resolve(
-      err(new AnalysisCancelledError("open_binary", { cause: signal.reason })),
-    );
+    return Promise.resolve(err(cancelledBy("open_binary", signal)));
   if (target.kind !== "executable")
     return Promise.resolve(ok({ profile: null }));
   if (installation.status === "unavailable")
@@ -291,7 +306,9 @@ export const resolveGhidraAnalysisProfile = async (
               native_aot_metadata: {
                 contract_revision: NATIVE_AOT_PROFILE_CONTRACT_REVISION,
                 source_bytes: NATIVE_AOT_MAX_SOURCE_BYTES,
-                work_units: NATIVE_AOT_MAX_WORK_UNITS,
+                base_work_units: NATIVE_AOT_BASE_WORK_UNITS,
+                work_units_per_source_byte:
+                  NATIVE_AOT_WORK_UNITS_PER_SOURCE_BYTE,
                 working_memory_bytes: NATIVE_AOT_MAX_WORKING_MEMORY_BYTES,
                 report_bytes: NATIVE_AOT_MAX_REPORT_BYTES,
               },
@@ -316,7 +333,12 @@ export const resolveGhidraAnalysisProfile = async (
               windows_arm_pe_machine: target.peMachine ?? null,
             }
           : {}),
-        ...sharedAnalysisSemantics,
+        ...sharedAnalysisSemantics(),
+        // Windows P0 has no database-mutation authority: limitations only.
+        loader_relocation_semantics:
+          installation.platform === "win32"
+            ? readOnlyLoaderRelocationSemantics
+            : loaderRelocationSemantics,
         no_return_repair:
           installation.platform === "win32"
             ? "disabled-windows-p0"
@@ -406,6 +428,14 @@ export const ghidraProfileLanguageOverride = (
     : { languageId, compilerSpecId };
 };
 
+/** Read back the language a provider-pinned profile imports with, for any pinned lane. */
+export const ghidraProfilePinnedLanguage = (
+  parameters: Readonly<Record<string, unknown>>,
+): GhidraLanguageOverride | undefined =>
+  parameters.language_selection === "provider-pinned-v1"
+    ? ghidraProfileLanguageOverride(parameters)
+    : undefined;
+
 /** Whether a committed profile and the active configuration select the same language. */
 export const sameGhidraLanguageOverride = (
   left: GhidraLanguageOverride | undefined,
@@ -465,16 +495,21 @@ export const existingGhidraAnalysisProfile = (
   target: BinaryTarget,
   provider: Parameters<typeof createAnalysisProfile>[0],
   project: JsonValue,
-) =>
-  createAnalysisProfile(provider, {
+) => {
+  const mipsElf = ghidraMipsProfileParameters(target).mips_elf;
+  return createAnalysisProfile(provider, {
     target_kind: target.kind,
     target_format: target.format,
     architecture: target.architecture ?? null,
+    ...(mipsElf === undefined ? {} : { mips_elf: mipsElf }),
     import_mode: "existing-project-private-copy-v1",
-    ...sharedAnalysisSemantics,
+    ...sharedAnalysisSemantics(),
+    selected_project_relationship_coverage: "prior-analysis-unknown-v1",
     annotation_policy: "read-only-existing-project-v1",
+    loader_relocation_semantics: readOnlyLoaderRelocationSemantics,
     existing_project: project,
     original_analysis: { completeness: "unknown", settings: "unknown" },
     no_return_repair: "disabled-existing-project",
     process_launch: "inspected-jvm-launch-support-v1",
   });
+};

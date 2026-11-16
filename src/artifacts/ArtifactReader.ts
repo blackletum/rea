@@ -1,9 +1,12 @@
 import { fixedAllowanceRemediation } from "../domain/fixedAllowanceRemediation.js";
+import type { ArtifactReaderLimitFact } from "../domain/artifactReaderLimits.js";
 import type {
   ArtifactAdmissionLimit,
+  ArtifactIntegrityCheck,
   ArtifactLimitBoundary,
 } from "../domain/artifactOperationError.js";
 import type {
+  ArtifactContainerIntegrityPair,
   ArtifactIntegrityClaim,
   ArtifactIntegrityDetails,
 } from "../domain/artifactIntegrity.js";
@@ -25,6 +28,8 @@ import type {
 export interface ArtifactReaderFailureOptions extends ErrorOptions {
   /** Recovery guidance established by the producing adapter, separate from diagnostics. */
   readonly userMessage?: string | undefined;
+  /** Regular-file path observed behind a rejected selected symlink; retry still revalidates it. */
+  readonly resolvedPath?: string | undefined;
   readonly cancellation?: { readonly reason: unknown } | undefined;
   readonly cleanup?: AnalysisCleanupObservation | undefined;
   /** Exact authority for all reported cleanup; undefined leaves ownership unknown. */
@@ -34,6 +39,9 @@ export interface ArtifactReaderFailureOptions extends ErrorOptions {
   readonly boundary?: ArtifactLimitBoundary;
   /** Named admission whose recovery must not be inferred from other limit text. */
   readonly admission?: ArtifactAdmissionLimit;
+  readonly readerLimit?: ArtifactReaderLimitFact;
+  /** For an `integrity` failure, the check that failed, when the reader names it. */
+  readonly integrityCheck?: ArtifactIntegrityCheck;
 }
 
 /** Archive-neutral entry metadata. Reader adapters never choose output paths. */
@@ -98,6 +106,22 @@ export const copyArtifactEntry = (entry: ArtifactEntry): ArtifactEntry => ({
     ? {}
     : { sourceIdentity: { ...entry.sourceIdentity } }),
 });
+
+/**
+ * Require that an opened entry is one this reader produced, unchanged. Throws
+ * the `integrity` failure naming `foreign-entry` when the reader has no such
+ * entry, or `entry-metadata` when the supplied facts differ from it.
+ */
+export function assertProducedEntry<Produced extends ArtifactEntry>(
+  entry: ArtifactEntry,
+  produced: Produced | undefined,
+  message: string,
+): asserts produced is Produced {
+  if (produced !== undefined && sameArtifactEntry(entry, produced)) return;
+  throw new ArtifactReaderFailure("integrity", message, {
+    integrityCheck: produced === undefined ? "foreign-entry" : "entry-metadata",
+  });
+}
 
 /** Compare every portable and adapter-owned fact supplied with an entry. */
 export const sameArtifactEntry = (
@@ -181,11 +205,19 @@ export interface ArtifactReaderTraversal {
   readonly examinedEntries?: number;
 }
 
-/** Per-iterator observation sink; adapters report intentional omissions without shared state. */
+/**
+ * Per-iterator observation sink; adapters report intentional omissions without shared state.
+ * A reader declares its coverage through `onCoverage` before its iterator ends,
+ * including complete coverage; consumers that need a completeness claim
+ * iterate through `declaredArtifactEntries`, which treats silence as unknown.
+ */
 export interface ArtifactTraversalOptions {
   readonly onOmission?: (omission: ArtifactTraversalOmission) => void;
   readonly onCoverage?: (coverage: ArtifactReaderTraversal) => void;
 }
+
+/** The sink of a traversal whose coverage feeds a completeness claim. */
+export type ArtifactTraversalSink = Required<ArtifactTraversalOptions>;
 
 /** Read-only adapter over one directory, archive, or virtual container. */
 export interface ArtifactReader {
@@ -193,17 +225,24 @@ export interface ArtifactReader {
     | "directory"
     | ZipPackageFormat
     | "asar"
+    | "ines"
     | "godot-pck"
     | "unityfs"
+    | "wxapkg"
     | "uimage"
     | "pyinstaller"
     | "dotnet-bundle"
     | "bun-standalone"
+    | "deno-standalone"
     | "node-sea"
     | "intel-hex"
     | "srec"
     | "esp-image"
+    | "uf2"
+    | "dfuse"
+    | "esp-flash-image"
     | "fit"
+    | "ntfs-mft"
     | "file";
   entries(
     signal?: AbortSignal,
@@ -212,6 +251,8 @@ export interface ArtifactReader {
   open(entry: ArtifactEntry, signal?: AbortSignal): Promise<Readable>;
   provenance(): readonly ArtifactCommand[];
   formatMetadata?(): ArtifactFormatMetadata | undefined;
+  /** A checksum the container declares over its own bytes, with the observed value. */
+  containerIntegrity?(): ArtifactContainerIntegrityPair | undefined;
   /** Bind materialization to the exact inventoried carrier before creating outputs. */
   prepareContainer?(
     expectedSha256: string,
@@ -221,8 +262,14 @@ export interface ArtifactReader {
 }
 
 /** Typed adapter failure translated at provider boundary. */
+/** A selected-file read whose own cleanup failed. */
+export type CleanupFailedRead = ArtifactReaderFailure & {
+  readonly cleanup: AnalysisCleanupObservation;
+};
+
 export class ArtifactReaderFailure extends Error {
   readonly userMessage: string | undefined;
+  readonly resolvedPath: string | undefined;
   readonly cancellation: { readonly reason: unknown } | undefined;
   readonly cleanup: AnalysisCleanupObservation | undefined;
   readonly cleanupLeases: readonly AnalysisCleanupLease[] | undefined;
@@ -231,6 +278,8 @@ export class ArtifactReaderFailure extends Error {
   readonly boundary: ArtifactLimitBoundary | undefined;
   /** Named admission for a limit whose public recovery is owned by the producer. */
   readonly admission: ArtifactAdmissionLimit | undefined;
+  readonly readerLimit: ArtifactReaderLimitFact | undefined;
+  readonly integrityCheck: ArtifactIntegrityCheck | undefined;
 
   constructor(
     readonly reason:
@@ -248,6 +297,7 @@ export class ArtifactReaderFailure extends Error {
     super(message, options);
     this.name = "ArtifactReaderFailure";
     this.userMessage = options?.userMessage;
+    this.resolvedPath = options?.resolvedPath;
     this.cancellation =
       reason === "cancelled"
         ? (options?.cancellation ?? { reason: options?.cause })
@@ -258,6 +308,39 @@ export class ArtifactReaderFailure extends Error {
     this.partialObservation = options?.partialObservation;
     this.boundary = options?.boundary;
     this.admission = options?.admission;
+    this.readerLimit = options?.readerLimit;
+    this.integrityCheck = options?.integrityCheck;
+  }
+
+  /**
+   * Reader-owned facts a rebuilt failure must keep. Each rebuild chooses its
+   * own cause, cleanup, cancellation and partial observation.
+   */
+  primaryFacts(): Pick<
+    ArtifactReaderFailureOptions,
+    | "userMessage"
+    | "resolvedPath"
+    | "boundary"
+    | "admission"
+    | "readerLimit"
+    | "integrityCheck"
+  > {
+    return {
+      ...(this.userMessage === undefined
+        ? {}
+        : { userMessage: this.userMessage }),
+      ...(this.resolvedPath === undefined
+        ? {}
+        : { resolvedPath: this.resolvedPath }),
+      ...(this.boundary === undefined ? {} : { boundary: this.boundary }),
+      ...(this.admission === undefined ? {} : { admission: this.admission }),
+      ...(this.readerLimit === undefined
+        ? {}
+        : { readerLimit: this.readerLimit }),
+      ...(this.integrityCheck === undefined
+        ? {}
+        : { integrityCheck: this.integrityCheck }),
+    };
   }
 
   /** Retain completed facts when a later artifact step fails. */
@@ -298,20 +381,14 @@ export class ArtifactReaderFailure extends Error {
       primary.message,
       {
         cause: primary,
-        userMessage: primary.userMessage,
+        // The constrained bound survives cleanup wrapping, or a file-size
+        // refusal would be reported as a memory constraint once a close fails.
+        ...primary.primaryFacts(),
         cancellation: primary.cancellation,
         cleanup: combineCleanup(primary.cleanup, cleanup),
         cleanupLeases:
           cleanupLeases ??
           (cleanup === primary.cleanup ? primary.cleanupLeases : undefined),
-        // The constrained bound survives cleanup wrapping, or a file-size
-        // refusal would be reported as a memory constraint once a close fails.
-        ...(primary.boundary === undefined
-          ? {}
-          : { boundary: primary.boundary }),
-        ...(primary.admission === undefined
-          ? {}
-          : { admission: primary.admission }),
         ...(mergedObservation === undefined
           ? {}
           : { partialObservation: mergedObservation }),

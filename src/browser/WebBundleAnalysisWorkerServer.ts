@@ -1,3 +1,4 @@
+import type { JavaScriptSemanticPrecisionInput } from "../domain/javascript/javascriptSemanticPrecision.js";
 import { fitJavaScriptRouteSourceFacts } from "../domain/javascript/javascriptRouteResultBudget.js";
 import { jsonValueByteLength } from "../domain/jsonValueByteLength.js";
 import type { JsonValue } from "../domain/jsonValue.js";
@@ -24,9 +25,14 @@ import {
   webBundleWorkerMessageSchema,
   type WebBundleWorkerMessage,
 } from "./WebBundleAnalysisWorkerProtocol.js";
+import { decodeStrictUtf8 } from "../domain/strictUtf8.js";
+import { AnalysisResourceConstraintError } from "../domain/analysisErrorCore.js";
 
 export interface WebBundleScriptAnalyzer {
-  (script: IncludedScript): WebBundleScriptAnalysis;
+  (
+    script: IncludedScript,
+    precision?: JavaScriptSemanticPrecisionInput,
+  ): WebBundleScriptAnalysis;
 }
 
 class WebBundleWorkerInputError extends Error {}
@@ -116,7 +122,7 @@ const analyzeJob = async (
     let script: IncludedScript;
     try {
       const decoded: unknown = JSON.parse(
-        new TextDecoder("utf-8", { fatal: true }).decode(source.bytes),
+        decodeStrictUtf8(source.bytes, "strip-signature"),
       );
       script = includedWebScriptSchema.parse(decoded);
     } catch (cause) {
@@ -127,8 +133,11 @@ const analyzeJob = async (
     await send({ kind: "phase", id: request.id, phase: "analyze" });
     let result: WebBundleScriptAnalysis;
     try {
-      result = webBundleScriptAnalysisSchema.parse(analyze(script));
+      result = webBundleScriptAnalysisSchema.parse(
+        analyze(script, request.semantic_precision),
+      );
     } catch (cause) {
+      if (cause instanceof AnalysisResourceConstraintError) throw cause;
       throw new WebBundleWorkerOutputError(
         `Web bundle analyzer returned an invalid result: ${cause instanceof Error ? cause.message : String(cause)}`,
       );
@@ -193,13 +202,18 @@ const analyzeJob = async (
     });
     return true;
   } catch (cause: unknown) {
-    const resource = cause instanceof RangeError;
+    const refusal =
+      cause instanceof AnalysisResourceConstraintError ? cause : undefined;
+    const resource = cause instanceof RangeError || refusal !== undefined;
     const input = cause instanceof WebBundleWorkerInputError;
     const fatalCleanupFailure =
       cause instanceof ArtifactReaderFailure &&
       cause.cleanupLeases !== undefined &&
       cause.cleanupLeases.length > 0;
-    const rawMessage = cause instanceof Error ? cause.message : String(cause);
+    // The parent owns resource-error formatting; send the canonical reason.
+    const rawMessage =
+      refusal?.reason ??
+      (cause instanceof Error ? cause.message : String(cause));
     await send({
       kind: "failure",
       id: request.id,
@@ -211,6 +225,9 @@ const analyzeJob = async (
               cause instanceof TypeError
             ? "output"
             : "io",
+      ...(refusal?.reportedLimits == null
+        ? {}
+        : { limits: { ...refusal.reportedLimits } }),
       message:
         rawMessage.length > 2048 ? `${rawMessage.slice(0, 2048)}…` : rawMessage,
     });

@@ -16,6 +16,7 @@ import { verifyAndroidMetadata } from "./metadata.mjs";
 import { verifyAndroidClassSearch } from "./class-search.mjs";
 import { verifyAndroidFailureRecovery } from "./failure-recovery.mjs";
 import { resolveJadxConfigurationInputs } from "../../../dist/android/JadxConfiguration.js";
+import { HOST_PLATFORM } from "../../../dist/platform/HostPlatform.js";
 import { validateVerifierJadxConfiguration } from "../../lib/jadx-configuration-inspection.mjs";
 import { verifyWindowsAndroidLifecycle } from "./windows-lifecycle.mjs";
 
@@ -24,7 +25,7 @@ const apk = process.env.REA_ANDROID_TEST_APK;
 const jar = process.env.REA_JADX_MCP_JAR;
 if (apk === undefined || jar === undefined)
   throw new Error(
-    "verify:android requires REA_ANDROID_TEST_APK and REA_JADX_MCP_JAR. Run npm run fixtures:android and select the downloaded files; see docs/android-analysis.md.",
+    "verify:android requires REA_ANDROID_TEST_APK and REA_JADX_MCP_JAR. Run npm run fixtures:android and select the downloaded files; see docs/guides/android/android-analysis.md.",
   );
 await access(apk);
 await access(jar);
@@ -41,6 +42,7 @@ assert.equal(
 const configuration = await resolveJadxConfigurationInputs(
   process.env,
   "inspect_android_package",
+  HOST_PLATFORM,
 );
 await validateVerifierJadxConfiguration(
   configuration,

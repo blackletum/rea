@@ -22,6 +22,38 @@ import {
 import { managedFailure, readManagedValue } from "./ManagedReaderFailure.js";
 
 /**
+ * A MethodSpec row's Method column and instantiation blob: the generic
+ * method it instantiates and the row's byte offset. Shared by the edge
+ * naming below and by callers that resolve a referenced spec before the
+ * edge pass, so both use the same coded-index interpretation.
+ */
+export const methodSpecMethod = (
+  bytes: Buffer,
+  layout: ManagedMetadataLayout,
+  row: number,
+): {
+  readonly method: ReturnType<typeof decodeMetadataCodedIndex>;
+  readonly methodRaw: number;
+  readonly instantiation: number;
+  readonly offset: number;
+} => {
+  const cursor = metadataRowCursor(bytes, layout, 0x2b, row);
+  const methodRaw = cursor.readIndex(layout.codedIndexSize("MethodDefOrRef"));
+  const instantiation = cursor.readIndex(layout.blobIndexSize);
+  return {
+    method: decodeMetadataCodedIndex(
+      methodRaw,
+      MANAGED_CODED_INDEXES.MethodDefOrRef.bits,
+      MANAGED_CODED_INDEXES.MethodDefOrRef.tables,
+      layout.rowCounts,
+    ),
+    methodRaw,
+    instantiation,
+    offset: cursor.start,
+  };
+};
+
+/**
  * Index fields, member references, and methods by token, then name each
  * MethodSpec an inspected body calls after the generic method it instantiates,
  * so every edge target resolves through one lookup.
@@ -82,20 +114,16 @@ const readMethodSpec = (
 ): void => {
   const { token, row } = reference;
   const scope = `metadata.MethodSpec:${token}`;
-  const cursor = metadataRowCursor(bytes, layout, 0x2b, row);
-  const methodRaw = cursor.readIndex(layout.codedIndexSize("MethodDefOrRef"));
-  const instantiation = cursor.readIndex(layout.blobIndexSize);
-  const method = decodeMetadataCodedIndex(
-    methodRaw,
-    MANAGED_CODED_INDEXES.MethodDefOrRef.bits,
-    MANAGED_CODED_INDEXES.MethodDefOrRef.tables,
-    layout.rowCounts,
+  const { method, methodRaw, instantiation, offset } = methodSpecMethod(
+    bytes,
+    layout,
+    row,
   );
   if (method.kind !== "valid")
     issues.push({
       code: "invalid-row",
       scope,
-      offset: cursor.start,
+      offset,
       detail:
         method.kind === "null"
           ? "MethodSpec method coded index 0x0 is null, but the Method column must reference a row"
@@ -107,11 +135,16 @@ const readMethodSpec = (
   // A MethodSpec instantiates a method, so a field target never lends it a
   // name, even to a field operand.
   if (target !== undefined && target.kind !== "field")
-    members.set(token, { ...target, token, identitySha256: null });
+    members.set(token, {
+      ...target,
+      token,
+      rowResolved: false,
+      identitySha256: null,
+    });
   const instantiationFacts = specSignatureFacts(
     layout,
     readMetadataBlob(bytes, layout, instantiation, layout.blob?.size ?? 0),
-    { form: "instantiation", scope, offset: cursor.start },
+    { form: "instantiation", scope, offset },
     signatureTypeName,
   );
   const { types } = instantiationFacts;
@@ -138,22 +171,26 @@ const readMethodSpec = (
       arity === null
         ? "MethodSpec method does not have a decodable method signature"
         : `MethodSpec supplies ${String(types.length)} type argument(s), but its method declares ${String(arity)} generic parameter(s)`,
-      cursor.start,
+      offset,
     );
   if (
     target !== undefined &&
     target.kind === "method" &&
-    target.identitySha256 != null &&
+    (target.identitySha256 != null || target.rowResolved === true) &&
     instantiationFacts.resolvedSha256 !== null
   )
     members.set(token, {
       ...target,
       token,
-      identitySha256: createHash("sha256")
-        .update("managed-method-instantiation-v1\0")
-        .update(Buffer.from(target.identitySha256, "hex"))
-        .update(Buffer.from(instantiationFacts.resolvedSha256, "hex"))
-        .digest("hex"),
+      rowResolved: true,
+      identitySha256:
+        target.identitySha256 == null
+          ? null
+          : createHash("sha256")
+              .update("managed-method-instantiation-v1\0")
+              .update(Buffer.from(target.identitySha256, "hex"))
+              .update(Buffer.from(instantiationFacts.resolvedSha256, "hex"))
+              .digest("hex"),
     });
 };
 

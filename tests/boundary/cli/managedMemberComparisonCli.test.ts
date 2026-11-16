@@ -16,8 +16,72 @@ import { parseEvidence } from "../../../src/domain/evidence.js";
 import { managedMemberInspectionSchema } from "../../../src/domain/managed/managedArtifact.js";
 import { managedMemberComparisonResultSchema } from "../../../src/domain/managed/managedMemberComparison.js";
 import { buildManagedPeFixture } from "../../../src/dotnet/ManagedPe.fixture.js";
+import { comparisonLimitations } from "../../../src/domain/managed/managedMemberComparisonCoverage.js";
+import { buildManagedMemberSelectionCapacityFixture } from "../../fixtures/managedMemberCapacity.js";
 import { createTestTempDirectory } from "../../fixtures/temporaryDirectory.js";
 import { cliTest } from "../../support/cli/cliFixture.js";
+
+cliTest(
+  "compares proven same-artifact TypeSpec rows through CLI and MCP",
+  async ({ cli }) => {
+    const directory = await createTestTempDirectory("rea-typespec-row-proof-");
+    const call = await cli.sharedMcpCall!();
+    for (const [name, token, spec, resolved] of [
+      ["resolved", 0x0a000001, [0x1d, 8], true],
+      ["missing-row", 0x0a000002, [0x1d, 8], false],
+      ["malformed-owner", 0x0a000001, [0x7f], false],
+    ] as const) {
+      const operand = Buffer.alloc(4);
+      operand.writeUInt32LE(token);
+      const bytes = buildManagedPeFixture({
+        memberRefParentRaw: 12,
+        memberRefSignature: Buffer.from([0, 0, 1]),
+        typeSpecSignatures: [Buffer.from(spec)],
+        ilBody: Buffer.concat([
+          Buffer.from([0x1a, 0x28]),
+          operand,
+          Buffer.from([0x2a]),
+        ]),
+      });
+      const leftPath = join(directory, `${name}.dll`);
+      const rightPath = join(directory, `${name}-copy.dll`);
+      await writeFile(leftPath, bytes);
+      await writeFile(rightPath, bytes);
+      const inspection = await cli.run({
+        arguments: ["inspect-managed-members", leftPath, "--json"],
+      });
+      expect(inspection.exitCode, inspection.stderr).toBe(0);
+      const left = parseEvidence(inspection.json);
+      const facts = managedMemberInspectionSchema.parse(left.normalized_result);
+      expect(facts.call_edges[0]).toMatchObject({
+        target_identity_sha256: null,
+        target_row_resolved: resolved,
+      });
+      const other = await call("inspect_managed_members", { path: rightPath });
+      expect(other.isError, JSON.stringify(other)).not.toBe(true);
+      const right = parseEvidence(other.structuredContent);
+      const compared = await cli.run({
+        arguments: ["compare-managed-members", leftPath, rightPath, "--json"],
+      });
+      expect(compared.exitCode, compared.stderr).toBe(0);
+      const mcp = await call("compare_managed_members", { left, right });
+      expect(mcp.isError, JSON.stringify(mcp)).not.toBe(true);
+      for (const evidence of [
+        parseEvidence(compared.json),
+        parseEvidence(mcp.structuredContent),
+      ]) {
+        const result = managedMemberComparisonResultSchema.parse(
+          evidence.normalized_result,
+        );
+        expect(result.left.artifact_sha256).toBe(facts.artifact.sha256);
+        expect(result.right.artifact_sha256).toBe(facts.artifact.sha256);
+        expect(result.methods[0]?.status).toBe(
+          resolved ? "unchanged" : "unknown",
+        );
+      }
+    }
+  },
+);
 
 cliTest(
   "attributes malformed managed comparison input to its selected argument and retains completed peer Evidence",
@@ -33,12 +97,26 @@ cliTest(
     await writeFile(bad, bytes);
 
     const healthy = await cli.run({
-      arguments: ["compare-managed-members", good, good, "--json"],
+      arguments: [
+        "compare-managed-members",
+        good,
+        good,
+        "--max-snapshot-bytes",
+        String(bytes.length),
+        "--max-metadata-representation-bytes",
+        "1048576",
+        "--json",
+      ],
     });
     expect(healthy.exitCode, healthy.stderr).toBe(0);
     expect(healthy.json).toMatchObject({
       operation: "compare_managed_members",
-      parameters: { left_path: good, right_path: good },
+      parameters: {
+        left_path: good,
+        right_path: good,
+        max_snapshot_bytes: bytes.length,
+        max_metadata_representation_bytes: 1048576,
+      },
     });
 
     for (const field of ["leftPath", "rightPath"] as const) {
@@ -118,7 +196,7 @@ cliTest(
       const sha256 = createHash("sha256").update(bytes).digest("hex");
       await writeFile(path, bytes);
       await writeFile(peerPath, bytes);
-      const inspected = await cli.sharedCliRun!({
+      const inspected = await cli.run({
         arguments: ["inspect-managed-members", path, "--json"],
       });
       expect(inspected.exitCode, inspected.stderr).toBe(0);
@@ -144,7 +222,7 @@ cliTest(
             : {}),
         });
       }
-      const compared = await cli.sharedCliRun!({
+      const compared = await cli.run({
         arguments: ["compare-managed-members", path, path, "--json"],
       });
       expect(compared.exitCode, compared.stderr).toBe(0);
@@ -190,6 +268,142 @@ cliTest(
         expect(report.fields[0]?.status).toBe("unchanged");
       }
     }
+  },
+);
+
+cliTest(
+  "surfaces one side's member capacity limit in the comparison and recovers with a shared --type selection",
+  async ({ cli }) => {
+    const directory = await createTestTempDirectory("rea-managed-capacity-");
+    const left = join(directory, "left.dll");
+    const right = join(directory, "right.dll");
+    await writeFile(
+      left,
+      buildManagedPeFixture({
+        additionalEmptyTypes: 1,
+        fieldRowCount: 2,
+        methodRowCount: 2,
+        firstTypeFieldRowCount: 1,
+        firstTypeMethodRowCount: 1,
+        distinctMemberNames: true,
+      }),
+    );
+    await writeFile(right, buildManagedMemberSelectionCapacityFixture(1));
+    const call = await cli.sharedMcpCall!();
+    const sources = [];
+    for (const path of [left, right]) {
+      const reply = await call("inspect_managed_members", { path });
+      expect(reply.isError, JSON.stringify(reply)).not.toBe(true);
+      const evidence = parseEvidence(reply.structuredContent);
+      sources.push({
+        evidence,
+        report: managedMemberInspectionSchema.parse(evidence.normalized_result),
+      });
+    }
+    const [leftSource, rightSource] = sources;
+    if (leftSource === undefined || rightSource === undefined)
+      throw new Error("Missing source inspection");
+    const limits = rightSource.report.coverage.issues.filter(
+      ({ code }) => code === "resource-limit",
+    );
+    expect(limits).toEqual([
+      expect.objectContaining({
+        code: "resource-limit",
+        scope: "metadata.representation",
+        offset: null,
+      }),
+    ]);
+
+    const whole = await cli.run({
+      arguments: ["compare-managed-members", left, right, "--json"],
+    });
+    expect(whole.exitCode, whole.stderr).toBe(0);
+    const wholeEvidence = parseEvidence(whole.json);
+    const wholeReport = managedMemberComparisonResultSchema.parse(
+      wholeEvidence.normalized_result,
+    );
+    expect(wholeReport.coverage).toEqual({
+      status: "partial",
+      left_status: "complete",
+      right_status: "partial",
+    });
+    expect(wholeReport.right.methods_total).toBe(0);
+    expect(wholeReport.left.resource_limits).toEqual([]);
+    expect(wholeReport.right.resource_limits).toEqual(limits);
+    expect(wholeReport.limitations).toEqual(
+      comparisonLimitations(leftSource.report, rightSource.report),
+    );
+    expect(wholeReport.limitations).toContainEqual(
+      expect.stringMatching(
+        /right.*metadata\.representation.*do not establish absence/i,
+      ),
+    );
+    expect(wholeReport.limitations).toContainEqual(
+      expect.stringMatching(/smaller selection.*type_names.*--type/i),
+    );
+    const mcpCompared = await call("compare_managed_members", {
+      left: leftSource.evidence,
+      right: rightSource.evidence,
+    });
+    expect(mcpCompared.isError, JSON.stringify(mcpCompared)).not.toBe(true);
+    expect(
+      parseEvidence(mcpCompared.structuredContent).normalized_result,
+    ).toMatchObject({
+      left: { resource_limits: [] },
+      right: { resource_limits: limits },
+      coverage: wholeReport.coverage,
+    });
+    expect(wholeEvidence.limitations).toEqual(
+      expect.arrayContaining(wholeReport.limitations),
+    );
+
+    const selected = await cli.run({
+      arguments: [
+        "compare-managed-members",
+        left,
+        right,
+        "--type",
+        "Fixture.Empty0",
+        "--json",
+      ],
+    });
+    expect(selected.exitCode, selected.stderr).toBe(0);
+    const selectedEvidence = parseEvidence(selected.json);
+    expect(selectedEvidence.parameters).toMatchObject({
+      left_path: left,
+      right_path: right,
+      type_names: ["Fixture.Empty0"],
+    });
+    const selectedReport = managedMemberComparisonResultSchema.parse(
+      selectedEvidence.normalized_result,
+    );
+    expect(selectedReport.coverage).toMatchObject({
+      left_status: "complete",
+      right_status: "complete",
+    });
+    expect(selectedReport.left.resource_limits).toEqual([]);
+    expect(selectedReport.right.resource_limits).toEqual([]);
+    expect(selectedReport.summary).toEqual({
+      unchanged: 2,
+      changed: 0,
+      added: 0,
+      removed: 0,
+      unknown: 0,
+    });
+    expect(selectedReport.fields).toMatchObject([
+      {
+        status: "unchanged",
+        left: { name: "Field0" },
+        right: { name: "Field0" },
+      },
+    ]);
+    expect(selectedReport.methods).toMatchObject([
+      {
+        status: "unchanged",
+        left: { name: "Method0" },
+        right: { name: "Method0" },
+      },
+    ]);
   },
 );
 
@@ -248,6 +462,7 @@ it.each([true, false])(
     try {
       const result = await registeredComparisonCommand().run({
         args: { leftPath: "left.dll", rightPath: "right.dll" },
+        options: {},
       });
       expect(result).toMatchObject({
         error: "Managed member comparison failed",
@@ -296,6 +511,7 @@ it("retains completed comparison Evidence when interrupted during final cleanup"
   try {
     const result = await registeredComparisonCommand().run({
       args: { leftPath: "left.dll", rightPath: "right.dll" },
+      options: {},
     });
     expect(result).toMatchObject({
       error: "Managed member comparison failed",

@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import * as t from "@babel/types";
 
 import { semanticBindingAtRead } from "./javascriptSemanticMutationInitializers.js";
-import { isUnmodifiedGlobalReference } from "./javascriptSemanticAmbientWrites.js";
+import { isUnmodifiedGlobalReference } from "./javascriptSemanticGlobalReference.js";
 
 import { traverseJavaScriptAst } from "./javascriptSemanticTraversal.js";
 
@@ -89,7 +89,7 @@ export const collectJavaScriptExports = (
       const read = semanticBindingAtRead(
         withoutUnusedFactoryDefaults(binding, roles),
         reference,
-        bindings.parentsByNode,
+        bindings,
       );
       if (read.status !== "ordered") return "unresolved";
       return read.binding.initializers.length === 0 &&

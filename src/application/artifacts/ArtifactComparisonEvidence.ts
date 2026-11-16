@@ -7,8 +7,9 @@ import { AnalysisError } from "../../domain/analysisErrorBase.js";
 import { AnalysisInputError } from "../../domain/analysisErrorCore.js";
 import { inspectAnalysisViewValidated } from "../analysisView/AnalysisViewService.js";
 import type { EvidenceFileReadOptions } from "../analysisView/evidenceFileSource.js";
-import type { ArtifactComparisonInput } from "../../contracts/sessionToolSchemas.js";
-import { artifactInventorySummaryViewResultSchema } from "../../domain/analysisView/analysisView.js";
+import { artifactComparisonInputSchema } from "../../contracts/artifactComparisonContracts.js";
+import { parseAnalysisInput } from "../AnalysisInput.js";
+import { artifactInventorySummaryViewResultSchema } from "../../domain/analysisView/analysisViewResult.js";
 import {
   compareArtifacts,
   type ArtifactComparisonResult,
@@ -24,7 +25,7 @@ import {
   type Evidence,
 } from "../../domain/evidence.js";
 import { readEvidence } from "../../domain/evidenceValidation.js";
-import { artifactInventorySummaryProjectionIds } from "../../domain/analysisView/artifactInventorySummaryProjection.js";
+import { RECREATE_EVIDENCE_GUIDANCE } from "../../domain/evidenceFormat.js";
 import { err, ok, type Result } from "../../domain/result.js";
 
 const OPERATION = "compare_artifacts";
@@ -46,11 +47,18 @@ export interface ArtifactComparisonOutcome {
  * then resolve a summary to its exact retained parent inventory.
  */
 export const resolveArtifactComparisonSources = async (
-  input: ArtifactComparisonInput,
+  input: unknown,
   evidenceById: EvidenceLookup | undefined,
   options: EvidenceFileReadOptions = {},
 ): Promise<Result<ArtifactComparisonSources, AnalysisError>> => {
-  return resolvePairedEvidenceSources(input, evidenceById, {
+  const request = parseAnalysisInput(
+    OPERATION,
+    input,
+    artifactComparisonInputSchema,
+    options.signal,
+  );
+  if (!request.ok) return request;
+  return resolvePairedEvidenceSources(request.value, evidenceById, {
     ...options,
     operation: OPERATION,
     resolveEvidence: (candidate, related, side) => {
@@ -130,12 +138,10 @@ export const resolveArtifactComparisonEvidence = (
   const parent = evidenceById?.(parentId);
   if (parent === undefined)
     return err(
-      new EvidenceReferenceError(
-        parentId,
-        "missing",
-        "retained complete artifact inventory Evidence",
-        null,
-      ),
+      new EvidenceReferenceError(parentId, "missing", {
+        expected: "retained complete artifact inventory Evidence",
+        actual: null,
+      }),
     );
   const selected = resolveEvidenceInput(
     { kind: "retained-evidence", evidence_id: parentId },
@@ -172,18 +178,15 @@ export const resolveArtifactComparisonEvidence = (
     (evidenceId) => (evidenceId === parentId ? presentation : undefined),
   );
   if (!reprojected.ok) return reprojected;
-  if (
-    !artifactInventorySummaryProjectionIds(reprojected.value).includes(
-      evidence.evidence_id,
-    )
-  )
-    return mismatch();
+  // Only the current format's projection identifies the summary; the format
+  // owner refuses earlier projections instead of rebuilding them.
+  if (reprojected.value.evidence_id !== evidence.evidence_id) return mismatch();
   return ok(owner);
 };
 
 const mismatch = (): Result<never, EvidenceIntegrityError> =>
   err(
     new EvidenceIntegrityError(
-      "Artifact summary does not match its retained parent inventory.",
+      `Artifact summary does not match its retained parent inventory. A summary from an earlier Evidence format no longer matches. ${RECREATE_EVIDENCE_GUIDANCE}`,
     ),
   );

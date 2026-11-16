@@ -1,5 +1,5 @@
 import { desktopPathConventions } from "../domain/nativeConvention.js";
-import { isAbsolute } from "node:path";
+import { basename, isAbsolute } from "node:path";
 import {
   DirectoryArtifactReader,
   DirectoryArtifactRootFailure,
@@ -13,6 +13,7 @@ import {
   type ArtifactResourceOwner,
 } from "./ArtifactResourceScope.js";
 import { abortIfNeeded } from "./ArtifactHash.js";
+import { declaredArtifactEntries } from "./ArtifactTraversalObservation.js";
 import { translateArtifactFailure } from "./ArtifactOperationFailure.js";
 import {
   inspectDesktopFile,
@@ -174,7 +175,7 @@ export class DesktopApplicationReader implements DesktopApplicationPort {
           cleanup: cause.cleanup,
           cleanupLeases: cause.cleanupLeases,
           partialObservation: partial,
-          ...(cause.boundary === undefined ? {} : { boundary: cause.boundary }),
+          ...cause.primaryFacts(),
         },
         cause.details,
       );
@@ -236,6 +237,7 @@ const scanDirectory = async (
   const files: DesktopFile[] = [];
   const omissions: DesktopOmission[] = [];
   const unityWitnessRoots = new Set<string>();
+  const rootName = basename(root.canonical_path);
   const budget: DesktopReadBudget = {
     bytes: 0,
     maximum: input.max_probe_bytes,
@@ -269,7 +271,7 @@ const scanDirectory = async (
     "Unity reference decoding stops after a witness in each Data/Managed directory; other assemblies' references are unexamined. Header facts remain per-file.",
   ];
   try {
-    for await (const entry of reader.entries(signal, {
+    for await (const entry of declaredArtifactEntries(reader, signal, {
       maximumEntries: input.max_entries,
       onOmission: (omission) => {
         if (omission.kind !== "directory-descendants") {
@@ -299,9 +301,12 @@ const scanDirectory = async (
       entries++;
       abortIfNeeded(signal);
       const conventions =
-        entry.kind === "file" ? pathConventions(entry.path) : undefined;
+        entry.kind === "file"
+          ? pathConventions(entry.path, rootName)
+          : undefined;
       // Reserve the row and every repeated path before retaining them: each
-      // convention fact copies the path and its probes copy the local path.
+      // convention fact copies at most the path and its probes copy the
+      // local path.
       reserve(
         RETAINED_ROW_BYTES +
           retainedTextBytes(entry.path) +
@@ -487,10 +492,19 @@ const fileRow = (
   };
 };
 
-/** Path-convention facts of one file; each repeats the path as its value. */
-const pathConventions = (path: string) => {
-  const conventions = desktopPathConventions(path);
+/** Path-convention facts of one file; each value repeats at most the path. */
+const pathConventions = (path: string, rootName: string) => {
+  const conventions = desktopPathConventions(path, rootName);
   const facts: DesktopFact[] = [];
+  if (
+    conventions.unityIl2cppBackupAssembly &&
+    conventions.unityIl2cppBackupDirectory !== null
+  )
+    facts.push({
+      kind: "unity-il2cpp-backup-convention",
+      offset: null,
+      value: { backup_directory: conventions.unityIl2cppBackupDirectory },
+    });
   if (conventions.electronArchive)
     facts.push({ kind: "electron-asar-convention", offset: null, value: path });
   if (conventions.unrealContainer)

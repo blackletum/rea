@@ -12,7 +12,7 @@ import {
   type JavaScriptSemanticAnalysisState,
 } from "./javascriptSemanticState.js";
 import * as t from "@babel/types";
-import { isUnmodifiedGlobalReference } from "./javascriptSemanticAmbientWrites.js";
+import { isUnmodifiedGlobalReference } from "./javascriptSemanticGlobalReference.js";
 
 export const isFetchCall = (
   node: t.Node,
@@ -89,8 +89,7 @@ const isXhrOpenRequest = (
     if (
       initializer === undefined ||
       initializer.projection.length !== 0 ||
-      !semanticBindingAtRead(binding, receiver, bindings.parentsByNode)
-        .hasDefiniteInitializer
+      !semanticBindingAtRead(binding, receiver, bindings).hasDefiniteInitializer
     )
       return false;
     receiver = unwrapJavaScriptExpression(initializer.node).node;

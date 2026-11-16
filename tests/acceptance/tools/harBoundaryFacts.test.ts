@@ -87,10 +87,16 @@ cliTest(
           ],
         });
       } else {
-        expect(JSON.stringify(result)).toContain(marker);
         expect(result).toMatchObject({
           items: [
-            {},
+            {
+              reported: {
+                name: { payload: marker },
+                type: { body: marker },
+                request: { reason: { payload: marker } },
+                response: { method: { payload: marker } },
+              },
+            },
             {
               reported: {
                 name: scalarMarker,
@@ -150,7 +156,7 @@ cliTest(
       const text = JSON.stringify({ log });
       const path = join(root, `${label}.har`);
       await writeFile(path, text);
-      const output = await cli.run({
+      const invocation = {
         arguments: [
           "inspect-web-network-capture",
           path,
@@ -159,6 +165,10 @@ cliTest(
           "0",
           "--json",
         ],
+      };
+      const output = await cli.run({
+        ...invocation,
+        freshProcess: label === "null-timings",
       });
       expect(output.exitCode).toBe(1);
       const expected = {

@@ -4,6 +4,8 @@ import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { expect, it } from "vitest";
+import { withVerifierCleanup } from "../../../scripts/lib/verifier-cleanup.mjs";
+import { awaitAcknowledgement } from "../../fixtures/lifecycleAcknowledgement.js";
 import { JavaScriptAnalysisWorker } from "../../../src/javascript/analysis/JavaScriptAnalysisWorker.js";
 import { createJavaScriptSourceAnalysis } from "../../../src/artifacts/javascript/JavaScriptSourceAnalysis.js";
 import { ArtifactResourceScope } from "../../../src/artifacts/ArtifactResourceScope.js";
@@ -12,6 +14,11 @@ import { ProcessOwnershipEvidenceOwner } from "../../../src/process/ProcessOwner
 import type { OwnedProcessGroup } from "../../../src/process/ProcessOwnership.js";
 import { createTestTempDirectory } from "../../fixtures/temporaryDirectory.js";
 import { ProviderCleanupError } from "../../../src/domain/providerCleanupError.js";
+import { AnalysisResourceConstraintError } from "../../../src/domain/analysisErrorCore.js";
+import {
+  JAVASCRIPT_MEMBER_MUTATION_WORK_ALLOWANCE,
+  JAVASCRIPT_MEMBER_MUTATION_WORK_LIMIT,
+} from "../../../src/domain/javascript/javascriptSemanticWorkAllowance.js";
 import { projectAnalysisError } from "../../../src/domain/analysisErrorProjection.js";
 import { spawnOwnedProviderProcess } from "../../../src/process/ProviderProcess.js";
 import { javaScriptWorkerMemoryLimitBytes } from "../../../src/process/JavaScriptWorkerMemoryLimit.js";
@@ -105,6 +112,61 @@ it("reuses one real owned analyzer while retaining distinct source identities an
     ).toEqual([]);
   } finally {
     await worker.close();
+  }
+});
+
+it("recovers finite primitive alternatives after changing precision on the same scope", async () => {
+  const scope = new ArtifactResourceScope();
+  const expression = Array.from(
+    { length: 9 },
+    (_, index) =>
+      `(globalThis.choice${String(index)} ? 0 : ${String(2 ** index)})`,
+  ).join(" + ");
+  const file = source(
+    "precision.mjs",
+    `export function choose() { return ${expression}; }`,
+  );
+  try {
+    for (const selected of [undefined, 512, undefined]) {
+      const worker = await createJavaScriptSourceAnalysis(
+        {
+          heapMb: 128,
+          timeoutMs: 30_000,
+          ...(selected === undefined
+            ? {}
+            : { semanticPrecision: { primitive_candidates: selected } }),
+        },
+        1,
+        { scope },
+      );
+      try {
+        const result = await worker.analyze(file, {
+          nodes: 100,
+          unknowns: 100,
+        });
+        if (!result.ok) throw result.error.error;
+        const value = result.value.module?.callables[0]?.returnSites[0]?.value;
+        if (selected === undefined) {
+          expect(value).toMatchObject({
+            status: "unknown",
+            resourceLimit: "primitive-candidates",
+          });
+        } else {
+          expect(value?.status).toBe("union");
+          if (value?.status !== "union")
+            throw new Error("Expected all finite alternatives");
+          expect(value.values).toHaveLength(512);
+          expect(value.values).toContain(511);
+          expect(result.value.module?.coverage.precision).toMatchObject({
+            primitive_candidates: 512,
+          });
+        }
+      } finally {
+        await worker.close();
+      }
+    }
+  } finally {
+    await scope.close();
   }
 });
 
@@ -225,7 +287,7 @@ it("keeps a worker parked while a limit change closes the previous process", asy
   let replacement:
     | ReturnType<typeof createJavaScriptSourceAnalysis>
     | undefined;
-  try {
+  await withVerifierCleanup(async () => {
     const initial = await createJavaScriptSourceAnalysis(limits, 1, {
       scope,
       launcher,
@@ -252,7 +314,7 @@ it("keeps a worker parked while a limit change closes the previous process", asy
       1,
       { scope, launcher },
     );
-    await closeStarted;
+    await awaitAcknowledgement(closeStarted, replacement, "worker close");
 
     const concurrent = await createJavaScriptSourceAnalysis(limits, 1, {
       scope,
@@ -288,13 +350,19 @@ it("keeps a worker parked while a limit change closes the previous process", asy
     await scope.close();
     await exits.get(parkedPid);
     expect(exited.has(parkedPid)).toBe(true);
-  } finally {
-    JavaScriptAnalysisWorker.prototype.close = originalClose;
-    releaseClose();
-    const port = await replacement?.catch(() => undefined);
-    await port?.close().catch(() => undefined);
-    await scope.close();
-  }
+  }, [
+    releaseClose,
+    async () => {
+      const port = await replacement?.catch(() => undefined);
+      await port?.close();
+    },
+    async () => {
+      await scope.close();
+    },
+    () => {
+      JavaScriptAnalysisWorker.prototype.close = originalClose;
+    },
+  ]);
 });
 
 it("does not start a replacement when closing the previous worker fails", async () => {
@@ -624,8 +692,9 @@ it("formats a real worker's declined semantic budget once", async () => {
     const { error } = result.error;
     expect(error).toMatchObject({
       _tag: "AnalysisResourceConstraintError",
-      reason:
-        "The parent reserved its remaining result capacity for static observations; semantic analysis of main.js was not started",
+      reason: expect.stringMatching(
+        /result capacity.*static observations.*semantic analysis of main\.js was not started/i,
+      ),
       reportedLimits: { semantic_result_budget_bytes: 0 },
     });
     expect(error.message.match(/Resource constraint during/gu)).toHaveLength(1);
@@ -637,7 +706,13 @@ it("formats a real worker's declined semantic budget once", async () => {
 });
 
 // The handshake mirrors the real server: only Node.js reports an enforced V8 heap limit.
-const resourceFailureWorker = (heapLimit: string) =>
+const resourceFailureWorker = (
+  heapLimit: string,
+  failure: { readonly resource: string; readonly limits: unknown } = {
+    resource: "memory",
+    limits: null,
+  },
+) =>
   new JavaScriptAnalysisWorker({ heapMb: 128, timeoutMs: 30_000 }, (request) =>
     spawnOwnedProviderProcess({
       ...request,
@@ -647,7 +722,7 @@ const resourceFailureWorker = (heapLimit: string) =>
 process.stdout.write(JSON.stringify({ kind: "ready", heap_limit_bytes: heap }) + "\\n");
 require("node:readline").createInterface({ input: process.stdin }).once("line", (line) => {
   const { id } = JSON.parse(line);
-  process.stdout.write(JSON.stringify({ kind: "failure", id, reason: "resource", resource: "memory", limits: null, message: "fixture" }) + "\\n");
+  process.stdout.write(JSON.stringify({ kind: "failure", id, reason: "resource", ...${JSON.stringify(failure)}, message: "fixture" }) + "\\n");
 });`,
       ],
     }),
@@ -679,6 +754,41 @@ it("reports the worker heap limit only when the runtime enforces V8 heap flags",
                 : { worker_process_memory_limit_bytes: processLimit }),
               worker_timeout_ms: 30_000,
             },
+    });
+  } finally {
+    await worker.close();
+  }
+});
+
+it("names the fixed work allowance a worker refusal reports", async () => {
+  const worker = resourceFailureWorker(
+    'process.versions.bun === undefined ? require("node:v8").getHeapStatistics().heap_size_limit : null',
+    {
+      resource: "cpu",
+      limits: {
+        [JAVASCRIPT_MEMBER_MUTATION_WORK_LIMIT]:
+          JAVASCRIPT_MEMBER_MUTATION_WORK_ALLOWANCE,
+      },
+    },
+  );
+  try {
+    const result = await worker.analyze(
+      source("app.mjs", "export const observed = 7;"),
+      { nodes: 100, unknowns: 100 },
+    );
+    if (result.ok) throw new Error("expected a reported resource failure");
+    const error = result.error.error;
+    if (!(error instanceof AnalysisResourceConstraintError))
+      throw new Error("expected a resource constraint");
+    expect(error).toMatchObject({
+      resource: "cpu",
+      retryable: false,
+      remediationAction: undefined,
+      fixedAllowance: {
+        kind: "work",
+        limit: JAVASCRIPT_MEMBER_MUTATION_WORK_ALLOWANCE,
+        unit: "alias states",
+      },
     });
   } finally {
     await worker.close();
@@ -796,7 +906,7 @@ it("retains legacy routes and a bounded route-fact prefix inside one checkpoint 
   } finally {
     await worker.close();
   }
-}, 60000);
+});
 
 it("keeps wrapped route ancestry, navigation and unknown named parents in the real worker", async () => {
   const worker = new JavaScriptAnalysisWorker({

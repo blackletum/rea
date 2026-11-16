@@ -1,4 +1,4 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect } from "vitest";
@@ -175,7 +175,11 @@ registerHooks({ load(url, context, nextLoad) {
         ),
       ],
       {
-        env: { ...process.env, REA_AGENT_EVAL_ROOT: parent },
+        env: {
+          ...process.env,
+          REA_AGENT_EVAL_ROOT: parent,
+          REA_AGENT_EVAL_KEEP_FIXTURES: "false",
+        },
         timeoutMs: 10_000,
       },
     );
@@ -190,14 +194,13 @@ registerHooks({ load(url, context, nextLoad) {
     if (incomplete) {
       expect(result.stderr).toContain("Artifact cleanup remains incomplete");
       expect(result.stderr).toContain("fixture cleanup denied");
-      expect(await readFile(join(run, "codex/auth.json"), "utf8")).toBe(
-        "inert fixture",
-      );
+      expect((await stat(run)).isDirectory()).toBe(true);
     } else {
-      await expect(
-        readFile(join(run, "codex/auth.json")),
-      ).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(stat(run)).rejects.toMatchObject({ code: "ENOENT" });
     }
+    await expect(readFile(join(run, "codex/auth.json"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   },
 );
 
@@ -221,14 +224,16 @@ processTest.for([
       import { setTimeout as delay } from "node:timers/promises";
       import { DarwinProcessOwnershipInspectionError } from ${JSON.stringify(new URL("../../../dist/process/DarwinProcessRunTokenReader.js", import.meta.url).href)};
       import { ProviderCleanupError } from ${JSON.stringify(new URL("../../../dist/domain/providerCleanupError.js", import.meta.url).href)};
+      import { AnalysisCleanupRelease } from ${JSON.stringify(new URL("../../../dist/domain/analysisCleanupRelease.js", import.meta.url).href)};
       let prepared = false;
-      const cleanup = new ProviderCleanupError("fixture", ["darwin-fixture-reader"], { reason: "fixture preparation cleanup denied" });
+      const release = new AnalysisCleanupRelease();
+      const cleanup = release.bind(new ProviderCleanupError("fixture", ["darwin-fixture-reader"], { reason: "fixture preparation cleanup denied" }));
       const preparation = new DarwinProcessOwnershipInspectionError("fixture preparation failure", {
         cleanupFailure: cleanup,
         cleanupOwner: { close: async () => {
           await writeFile(${JSON.stringify(retried)}, "exact preparation owner retried");
           if (${String(incomplete)}) throw new Error("fixture preparation cleanup denied");
-          cleanup.resolveCleanup();
+          release.confirm();
         } },
       });
       export class OwnedCommandFailure extends Error {
@@ -274,7 +279,11 @@ registerHooks({ load(url, context, nextLoad) {
         ),
       ],
       {
-        env: { ...process.env, REA_AGENT_EVAL_ROOT: parent },
+        env: {
+          ...process.env,
+          REA_AGENT_EVAL_ROOT: parent,
+          REA_AGENT_EVAL_KEEP_FIXTURES: "false",
+        },
         timeoutMs: 10_000,
       },
     );
@@ -298,13 +307,14 @@ registerHooks({ load(url, context, nextLoad) {
     if (incomplete) {
       expect(result.stderr).toContain("Artifact cleanup remains incomplete");
       expect(result.stderr).toContain("darwin-fixture-reader");
-      expect(
-        await readFile(join(observed.run, "codex/auth.json"), "utf8"),
-      ).toBe("inert preparation fixture");
+      expect((await stat(observed.run)).isDirectory()).toBe(true);
     } else {
-      await expect(
-        readFile(join(observed.run, "codex/auth.json")),
-      ).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(stat(observed.run)).rejects.toMatchObject({
+        code: "ENOENT",
+      });
     }
+    await expect(
+      readFile(join(observed.run, "codex/auth.json")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
   },
 );

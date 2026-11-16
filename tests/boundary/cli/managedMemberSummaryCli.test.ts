@@ -19,7 +19,7 @@ import {
 import {
   analysisViewResultSchema,
   managedMemberSummaryViewResultSchema,
-} from "../../../src/domain/analysisView/analysisView.js";
+} from "../../../src/domain/analysisView/analysisViewResult.js";
 import { parseEvidence, type Evidence } from "../../../src/domain/evidence.js";
 import { parseEvidenceBundle } from "../../../src/domain/evidenceBundle.js";
 import {
@@ -239,6 +239,7 @@ cliTest(
 
 cliTest(
   "retains complete member Evidence for exact CLI pages after process exit and target removal",
+  { tags: ["long-running"] },
   async ({ cli }) => {
     const root = await createTestTempDirectory("rea-member-summary-cli-");
     const path = join(root, "fixture.dll");
@@ -321,6 +322,14 @@ cliTest(
     const report = managedMemberInspectionSchema.parse(
       parent.normalized_result,
     );
+    // The fixture declares three MemberRef rows. Paging against the produced
+    // report alone would also pass if the inspector silently dropped rows.
+    expect(report.member_refs.map(({ token }) => token)).toEqual([
+      "0x0a000001",
+      "0x0a000002",
+      "0x0a000003",
+    ]);
+    expect(summary.summary.reported_counts.member_refs).toBe(3);
     expect(summary.summary.selection).toEqual({
       type_names: typeNames,
       unmatched_type_names: ["Missing.Type"],
@@ -341,11 +350,12 @@ cliTest(
       parent,
       report,
     };
+    // The producer has exited and its target is gone. Reuse only the reader
+    // process across page selections; every command still loads the bundle.
     await verifyCliFullPages(pageContext, summary.summary.reported_counts);
     await verifyCliSelection(pageContext);
     expect(await readFile(bundlePath, "utf8")).toBe(originalBytes);
   },
-  180_000,
 );
 
 cliTest(

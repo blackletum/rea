@@ -1,3 +1,4 @@
+import { WEB_MODULE_TRACE_PROVIDER } from "../domain/webTraceProviders.js";
 import { closeOwnedWebResources } from "./closeOwnedWebResources.js";
 import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
@@ -6,10 +7,10 @@ import {
   type AnalysisError,
 } from "../domain/analysisErrorBase.js";
 import {
-  AnalysisCancelledError,
   AnalysisCapabilityUnavailableError,
   AnalysisInputError,
   AnalysisOutputError,
+  cancelledBy,
 } from "../domain/analysisErrorCore.js";
 import { createEvidence, type Evidence } from "../domain/evidence.js";
 import { jsonObjectSchema } from "../domain/jsonValue.js";
@@ -156,11 +157,7 @@ export class WebModuleTraceService {
     let resolutionFailure: AnalysisError | undefined;
     if (literals.length > 0) {
       if (options?.signal?.aborted)
-        return incomplete(
-          new AnalysisCancelledError(OPERATION, {
-            cause: options.signal.reason,
-          }),
-        );
+        return incomplete(cancelledBy(OPERATION, options.signal));
       const request = {
         importerUrl,
         importMap:
@@ -273,11 +270,7 @@ export class WebModuleTraceService {
         sha256: data.sourceFile.sha256,
         format: "file",
       },
-      {
-        id: "rea-web-module-trace",
-        name: "REA captured module relationship trace",
-        version: "1",
-      },
+      WEB_MODULE_TRACE_PROVIDER,
       {
         operation: OPERATION,
         parameters: input,

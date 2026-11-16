@@ -11,6 +11,7 @@ import {
 } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { awaitAcknowledgement } from "../fixtures/lifecycleAcknowledgement.js";
 
 const fault = vi.hoisted(() => ({
   path: "",
@@ -142,7 +143,8 @@ it.skipIf(process.platform === "win32").each(["valid", "invalid"] as const)(
     const failure = result.error;
     if (kind === "invalid")
       expect(failure.message).toBe("Ghidra TCP endpoint is invalid");
-    expect(fault.handles[0]?.fd).not.toBe(-1);
+    expect(fault.handles).toHaveLength(1);
+    expect(fault.handles[0]?.fd).toBeGreaterThanOrEqual(0);
     expect(resources.hasPending).toBe(true);
     fault.blocked = false;
     await resources.retryCleanup();
@@ -242,7 +244,7 @@ it.skipIf(process.platform === "win32")(
       resourceScope: resources,
     });
     operations.push(pending);
-    await observed;
+    await awaitAcknowledgement(observed, pending, "Ghidra endpoint read");
     let closed = false;
     const closing = resources.close().then(() => {
       closed = true;

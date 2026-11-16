@@ -33,6 +33,7 @@ import { OwnedFileHandle } from "../../src/filesystem/OwnedFileHandle.js";
 import { primaryAnalysisError } from "../../src/domain/analysisErrorBase.js";
 import { buildManagedPeFixture } from "../../src/dotnet/ManagedPe.fixture.js";
 import { createTestTempDirectory } from "../fixtures/temporaryDirectory.js";
+import { wasmArtifactFixture } from "../fixtures/wasm/artifact.js";
 import { ProcessCaptureError } from "../../src/process/capture/ProcessCaptureError.js";
 
 import { reconstructionObligationLedgerSchema } from "../../src/domain/reconstructionObligationLedgerSchemas.js";
@@ -224,21 +225,23 @@ const activeRuntimeFixture = () => {
   const root = join(process.cwd(), "active-runtime-fixture");
   const applicationPath = join(root, "main.js");
   const result = createElectronActiveObservationFixtureResult(applicationPath);
-  const evidence = createElectronActiveEvidence(
-    {
-      ...electronActiveObservationInputSchema.parse({
-        executable_path: process.execPath,
-        application_path: applicationPath,
-        application_root: root,
-      }),
+  const input = {
+    ...electronActiveObservationInputSchema.parse({
+      executable_path: process.execPath,
+      application_path: applicationPath,
       application_root: root,
-    },
+    }),
+    application_root: root,
+  };
+  const evidence = createElectronActiveEvidence(
+    input,
     result,
     {
       id: "rea-playwright-electron-active",
       name: "REA Playwright active Electron observation provider",
       version: "1",
     },
+    input,
   );
   return { evidence, result };
 };
@@ -304,7 +307,7 @@ describe("runtime reconciliation failure ownership through the public SDK", () =
     },
     {
       field: "parameters",
-      path: ["parameters", "application_root"],
+      path: ["parameters", "resolved_paths", "application_root"],
       reason: "invalid_type",
     },
     {
@@ -324,7 +327,13 @@ describe("runtime reconciliation failure ownership through the public SDK", () =
           confidence: evidence.confidence,
           parameters:
             field === "parameters"
-              ? { ...evidence.parameters, application_root: 3 }
+              ? {
+                  ...evidence.parameters,
+                  resolved_paths: {
+                    ...(evidence.parameters.resolved_paths as object),
+                    application_root: 3,
+                  },
+                }
               : evidence.parameters,
           result:
             field === "parameters"
@@ -686,6 +695,7 @@ it.each(["missing", "invalid", "cleanup"])(
     });
     if (leftFailure === "cleanup")
       expect(result.error.cleanupResources).toContain(leftPath);
+    expect(owners.size).toBe(leftFailure === "cleanup" ? 2 : 1);
     expect([...owners].every((owner) => owner.handle.fd >= 0)).toBe(true);
 
     close.mockRestore();
@@ -913,6 +923,56 @@ describe("native matching failure ownership through the public SDK", () => {
           arguments: input,
         });
         expectUnexpectedToolFailure(response, failure);
+        expect(session.exportEvidenceBundle().records).toEqual([]);
+      });
+    },
+  );
+});
+
+describe("compare_wasm_interfaces Evidence attribution", () => {
+  const inspection = (selectedPath?: string) => {
+    const report = wasmArtifactFixture();
+    return createEvidence(
+      {
+        path: report.artifact.path,
+        sha256: report.artifact.sha256,
+        format: "file",
+      },
+      { id: "typed-fixture", name: "Typed fixture", version: "1" },
+      {
+        operation: "inspect_wasm_artifact",
+        parameters: { path: selectedPath ?? report.artifact.path },
+        result: report,
+        confidence: "observed",
+      },
+    );
+  };
+
+  it.each(["left", "right"] as const)(
+    "names the %s argument whose authentic Evidence selects another artifact",
+    async (side) => {
+      await withSdk(async ({ client, session }) => {
+        const rejected = inspection("/artifacts/other.wasm");
+        const response = await client.callTool({
+          name: "compare_wasm_interfaces",
+          arguments: {
+            left: side === "left" ? rejected : inspection(),
+            right: side === "right" ? rejected : inspection(),
+            scope: "both",
+          },
+        });
+
+        expect(parseMcpToolError(response).error).toMatchObject({
+          code: "invalid_request",
+          details: {
+            issues: [
+              expect.objectContaining({
+                path: [side],
+                reason: "invalid_value",
+              }),
+            ],
+          },
+        });
         expect(session.exportEvidenceBundle().records).toEqual([]);
       });
     },

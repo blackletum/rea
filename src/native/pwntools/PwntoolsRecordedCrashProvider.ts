@@ -1,6 +1,6 @@
 import {
-  AnalysisCancelledError,
   AnalysisOutputError,
+  cancelledBy,
 } from "../../domain/analysisErrorCore.js";
 import { AnalysisError } from "../../domain/analysisErrorBase.js";
 import {
@@ -13,7 +13,7 @@ import {
 import type { RecordedCrashPort } from "../../application/binaryDiagnostics/RecordedCrashPort.js";
 import { PrivateRuntimeRoot } from "../../process/PrivateRuntimeRoot.js";
 import { PwntoolsDecoder, type PwntoolsLauncher } from "./PwntoolsDecoder.js";
-import { PWNTOOLS_PROVIDER_IDENTITY } from "./PwntoolsRelease.js";
+import { PWNTOOLS_PROVIDER_IDENTITY } from "./PwntoolsProviderIdentity.js";
 import { validateCoreFileMappingAuthority } from "../pwndbg/CoreFileMappingAuthority.js";
 import { validateRecordedCrashSources } from "./RecordedCrashSourceBindings.js";
 import { validateRecordedCrashStructure } from "./RecordedCrashStructureBindings.js";
@@ -127,6 +127,7 @@ export class PwntoolsRecordedCrashProvider
           options,
           runCommand,
           timeoutMs,
+          producerLimits,
         }) => {
           if (!input.include_debugger_context) return value;
           const diagnostics = value.decoder_diagnostics;
@@ -144,8 +145,7 @@ export class PwntoolsRecordedCrashProvider
             });
           try {
             if (options?.signal?.aborted)
-              throw new AnalysisCancelledError("inspect_recorded_crash", {
-                cause: options.signal.reason,
+              throw cancelledBy("inspect_recorded_crash", options.signal, {
                 capturedOutput: diagnostics,
               });
             const authority = validateCoreFileMappingAuthority(
@@ -162,6 +162,7 @@ export class PwntoolsRecordedCrashProvider
               options,
               runCommand,
               timeoutMs,
+              producerLimits,
             });
             const context = completed.context;
             const enriched = validate(context);

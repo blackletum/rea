@@ -6,6 +6,7 @@ import type { JavaScriptPackageType } from "../domain/javascript/javascriptSourc
 import { logicalPathEscapesRoot } from "../domain/artifactIdentity.js";
 import {
   createReferenceSourcePathLookup,
+  rebaseReferenceSourceTarget,
   decodeReferenceSourceModuleUrlPath,
   isPortableAbsoluteReferenceTarget,
   type ReferenceSourcePathLookup,
@@ -24,6 +25,8 @@ import type {
   ReferenceSourceRead,
 } from "../reference/ReferenceSourceReaderTypes.js";
 import { typescriptEmittedSourceCandidates } from "./TypeScriptEmittedSourceCandidates.js";
+import { appendAll } from "../domain/appendAll.js";
+import { decodeStrictUtf8 } from "../domain/strictUtf8.js";
 
 export interface ParsedReferenceSourceEntries {
   readonly entries: HistoricalSourceGraphInput["entries"];
@@ -33,7 +36,7 @@ export interface ParsedReferenceSourceEntries {
 }
 
 /** Preserve the observed reader failure and add entry-specific recovery guidance. */
-export const projectReferenceSourceEntryFailure = (
+const projectReferenceSourceEntryFailure = (
   entry: Extract<ReferenceSourceEntry, { status: "failed" }>,
 ): string => `${entry.message} ${entryRecoveryGuidance(entry)}`;
 
@@ -150,7 +153,8 @@ const readPackageMetadata = (
     }
     try {
       const manifest: unknown = JSON.parse(
-        new TextDecoder("utf-8", { fatal: true }).decode(entry.bytes),
+        // npm and Node both accept a BOM-signed package.json.
+        decodeStrictUtf8(entry.bytes, "strip-signature"),
       );
       if (
         typeof manifest !== "object" ||
@@ -564,7 +568,7 @@ const appendFile = (
     limitations: [...(parsed?.limitations ?? [])],
   });
   if (parsed === undefined) return;
-  output.limitations.push(...parsed.limitations);
+  appendAll(output.limitations, parsed.limitations);
   for (const relationship of parsed.relationships) {
     const { resolutionStrategy, resolutionBasePath, ...graphRelationship } =
       relationship;
@@ -598,7 +602,7 @@ const appendFile = (
       resolution: resolved.resolution,
     });
   }
-  output.parseFailures.push(...parsed.parse_failures);
+  appendAll(output.parseFailures, parsed.parse_failures);
 };
 
 const appendReadEntry = (
@@ -630,7 +634,7 @@ const appendReadEntry = (
       entry.targetState === "internal" ||
       (entry.targetState === "missing" &&
         !isPortableAbsoluteReferenceTarget(entry.target))
-        ? posix.relative(posix.dirname(entry.path), entry.target) || "."
+        ? rebaseReferenceSourceTarget(entry.path, entry.target)
         : entry.target,
     target_state: entry.targetState,
     classifications,

@@ -1,3 +1,4 @@
+import { canonicalOutputSchema } from "../fixtures/canonicalOutputSchema.js";
 import { artifactMcpCall } from "../../scripts/lib/artifact-e2e.mjs";
 import { createHash } from "node:crypto";
 import { unlink, writeFile } from "node:fs/promises";
@@ -13,7 +14,7 @@ import { managedMemberInspectionSchema } from "../../src/domain/managed/managedA
 import {
   analysisViewResultSchema,
   managedMemberSummaryViewResultSchema,
-} from "../../src/domain/analysisView/analysisView.js";
+} from "../../src/domain/analysisView/analysisViewResult.js";
 import { buildManagedMemberCapacityFixture } from "../fixtures/managedMemberCapacity.js";
 import { createTestTempDirectory } from "../fixtures/temporaryDirectory.js";
 import { cliTest } from "../support/cli/cliFixture.js";
@@ -54,9 +55,11 @@ cliTest(
         (tool) => tool.name === "inspect_managed_members",
       );
       const ajv = new Ajv2020({ strict: false, validateFormats: false });
-      if (definition?.outputSchema === undefined)
+      if (definition === undefined)
         throw new Error("Managed member schema is absent");
-      const outputSchema: Record<string, unknown> = definition.outputSchema;
+      const outputSchema: Record<string, unknown> = canonicalOutputSchema(
+        definition.name,
+      );
       expect(ajv.validateSchema(definition.inputSchema)).toBe(true);
       expect(ajv.validateSchema(outputSchema)).toBe(true);
       const output = await cli.run({
@@ -86,28 +89,34 @@ cliTest(
       expect(report.types).toHaveLength(3);
       expect(report.methods).toEqual([]);
       const empty = report.types.find((type) => type.method_list.count === 0);
-      expect(empty).toBeDefined();
+      if (empty === undefined) throw new Error("Missing empty fixture type");
       const selectedCli = await cli.run({
         arguments: [
           "inspect-managed-members",
           path,
           "--type",
-          empty!.full_name,
+          empty.full_name,
           "--json",
         ],
       });
       expect(selectedCli.exitCode, selectedCli.stderr).toBe(0);
       const selected = await artifactMcpCall(client, {
         name: "inspect_managed_members",
-        arguments: { path, type_names: [empty!.full_name] },
+        arguments: { path, type_names: [empty.full_name] },
       });
       expect(selected.isError).not.toBe(true);
       const selectedEvidence = parseEvidence(selected.structuredContent);
       expect(selectedEvidence.normalized_result).toEqual(
         parseEvidence(selectedCli.json).normalized_result,
       );
-      expect(selectedEvidence.normalized_result).toMatchObject({
+      const selectedReport = managedMemberInspectionSchema.parse(
+        selectedEvidence.normalized_result,
+      );
+      expect(selectedReport).toMatchObject({
         coverage: { state: "complete", issues: [] },
+        selection: { type_names: [empty.full_name], unmatched_type_names: [] },
+        types: [{ token: empty.token, full_name: empty.full_name }],
+        methods: [],
       });
 
       const summaryReply = await artifactMcpCall(client, {

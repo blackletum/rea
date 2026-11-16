@@ -1,4 +1,9 @@
 import {
+  ParseFailureError,
+  unsupportedInput,
+} from "../../domain/parseFailure.js";
+import { invariantViolation } from "../../domain/internalInvariant.js";
+import {
   readBinaryPlistLayout,
   readBinaryPlistUnsigned64,
   type BinaryPlistLayout,
@@ -55,16 +60,18 @@ export interface BinaryPlistScalarDecodePlan {
 }
 
 /** A binary-plist UID cannot be projected to plist@5's numeric UID value exactly. */
-export class UnsupportedBinaryPlistUidError extends TypeError {
-  readonly _tag = "UnsupportedBinaryPlistUidError";
-
+export class UnsupportedBinaryPlistUidError extends ParseFailureError<"unsupported"> {
   constructor(
     readonly decimalValue: string,
     readonly sourceWidth: number,
   ) {
-    super(
-      `binary plist UID value ${decimalValue} in ${sourceWidth}-byte encoding exceeds the exact supported range`,
-    );
+    super({
+      kind: "unsupported",
+      format: "binary-plist",
+      detail: `binary plist UID value ${decimalValue} in ${sourceWidth}-byte encoding exceeds the exact supported range`,
+      field: "uid",
+      undecodedContent: true,
+    });
     this.name = "UnsupportedBinaryPlistUidError";
   }
 }
@@ -268,13 +275,19 @@ export const scanBinaryPlistScalars = (
   const capacity = Math.floor((trailer - offsetTable) / offsetWidth);
   if (countRaw > BigInt(capacity)) return result(true);
   const count = Number(countRaw);
+  const tableEnd = offsetTable + count * offsetWidth;
   if (referenceWidth < 1) return result(true);
   const objectOffsets: number[] = [];
   let incomplete = false;
   for (let index = 0; index < count; index += 1) {
     const rawOffset = sourceLayout.objectOffset(index);
     const offset = rawOffset > safeMaximum ? undefined : Number(rawOffset);
-    if (offset === undefined || offset < 8 || offset >= offsetTable) {
+    if (
+      offset === undefined ||
+      offset < 8 ||
+      (offset >= offsetTable && offset < tableEnd) ||
+      offset >= trailer
+    ) {
       incomplete = true;
       continue;
     }
@@ -324,6 +337,7 @@ export const scanBinaryPlistScalars = (
     const marker = bytes[offset] ?? 0;
     const type = marker >> 4;
     if (type === 3 && marker === 0x33) {
+      if (offset + 9 > offsetTable) incomplete = true;
       continue;
     }
     if (type !== 1 && type !== 2) continue;
@@ -404,7 +418,9 @@ export const decodeBinaryPlistScalars = (
     }
   const sourceLayoutResult = readBinaryPlistLayout(bytes);
   if (!sourceLayoutResult.ok)
-    throw new RangeError("binary plist trailer is truncated");
+    throw invariantViolation(
+      "binary plist trailer was not validated by its preflight",
+    );
   const sourceLayout = sourceLayoutResult.value;
   const sourceReferenceSize = sourceLayout.referenceWidth;
   const normalizedReferenceSize =
@@ -468,7 +484,8 @@ const cloneBinaryPlistObjects = (
     normalizedOffsetSize ??
     binaryPlistCloneOffsetWidth(offsetSize, trailerOffset, replacementLengths);
   if (newOffsetSize === undefined)
-    throw new RangeError(
+    throw unsupportedInput(
+      "plist",
       "binary plist cloned scalar offset exceeds supported width",
     );
   // Preserve every source offset, including objects after the old table. The
@@ -481,7 +498,8 @@ const cloneBinaryPlistObjects = (
   const newTableOffset = cloneStart + cloneBytes;
   const newLength = bytes.length + cloneBytes + objectCount * newOffsetSize;
   if (!Number.isSafeInteger(newLength))
-    throw new RangeError(
+    throw unsupportedInput(
+      "plist",
       "binary plist cloned scalar representation is too large",
     );
   const compatible = Buffer.alloc(newLength);

@@ -140,7 +140,7 @@ describe("dependency install freshness", () => {
     const cached = await runTurbo(root);
     expect(cached.status, cached.stderr).toBe(0);
     expect(`${cached.stdout}${cached.stderr}`).toMatch(/cache hit/u);
-  }, 60_000);
+  });
 
   it("preserves caller resource controls in strict cached builds without hashing their values", async () => {
     const root = await createBuildCacheFixture();
@@ -173,7 +173,7 @@ describe("dependency install freshness", () => {
     expect(cached.status, `${cached.stdout}${cached.stderr}`).toBe(0);
     expect(`${cached.stdout}${cached.stderr}`).toMatch(/cache hit/u);
     expect(`${cached.stdout}${cached.stderr}`).not.toMatch(/cache miss/u);
-  }, 60_000);
+  });
 });
 
 const createBuildCacheFixture = async (): Promise<string> => {
@@ -234,7 +234,7 @@ const createBuildCacheFixture = async (): Promise<string> => {
 await writeFile("resource-controls.json", JSON.stringify(Object.fromEntries(["GOMAXPROCS", "GOMEMLIMIT", "UV_THREADPOOL_SIZE", "REA_TEST_UNLISTED_ENV"].map((name) => [name, process.env[name] ?? null]))));
 await mkdir("dist", { recursive: true });
 await writeFile("dist/cache-fixture.js", "built");
-await writeFile("dist/catalogIdentity.js", "export const FULL_CATALOG_IDENTITY = { counts: { mcp_tools: 1 } };\\n");
+await writeFile("dist/catalogIdentity.js", "export const DEFAULT_CATALOG_IDENTITY = { counts: { mcp_tools: 1 } };\\n");
 await writeFile("dist/identity.js", ${JSON.stringify(`export const PRODUCT_IDENTITY = ${JSON.stringify({ packageSpecifier: `${packageJson.name}@latest`, registrationPackageSpecifier: `${packageJson.name}@${packageJson.version}` })};\n`)});
 `,
   );

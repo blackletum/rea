@@ -1,10 +1,11 @@
 import { access, stat } from "node:fs/promises";
+import { HOST_PLATFORM } from "../../platform/HostPlatform.js";
 import { constants } from "node:fs";
 import { isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
 import { AnalysisCapabilityUnavailableError } from "../../domain/analysisErrorCore.js";
 import type { HistoricalCaptureFormatAdapter } from "./HistoricalCaptureFormatAdapter.js";
-import { MITMPROXY_CAPTURE_PROVIDER_IDENTITY } from "./CaptureRelease.js";
+import { MITMPROXY_CAPTURE_PROVIDER_IDENTITY } from "./CaptureProviderIdentities.js";
 import { snapshotEnvironment } from "../../process/snapshotEnvironment.js";
 const OPERATION = "inspect_web_network_capture";
 const MITMDUMP_REQUIREMENT =
@@ -16,7 +17,9 @@ export class MitmproxyCaptureAdapter implements HistoricalCaptureFormatAdapter {
   readonly identity = MITMPROXY_CAPTURE_PROVIDER_IDENTITY;
   constructor(readonly environment: Readonly<NodeJS.ProcessEnv>) {}
   snapshotConfiguration(): HistoricalCaptureFormatAdapter {
-    return new MitmproxyCaptureAdapter(snapshotEnvironment(this.environment));
+    return new MitmproxyCaptureAdapter(
+      snapshotEnvironment(this.environment, HOST_PLATFORM.platform),
+    );
   }
   async command(
     requestPath: string,

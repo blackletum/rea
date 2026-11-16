@@ -31,8 +31,9 @@ import {
   type HeaderArchitecture,
 } from "../domain/binaryTargetTypes.js";
 import {
-  AnalysisCancelledError,
   AnalysisCapabilityUnavailableError,
+  cancelledBy,
+  carriedReason,
 } from "../domain/analysisErrorCore.js";
 import { BinaryTargetError } from "../domain/configurationErrors.js";
 import { ProviderAdapterError } from "../domain/providerAdapterError.js";
@@ -202,21 +203,11 @@ const resolveHopperAnalysisProfileInScope = async (
   });
 };
 
-/** Ghidra owns these lanes; Hopper names the family it declines rather than guessing. */
-const HOPPER_DECLINED_ARCHITECTURE_LABELS: Record<
-  ElfMetadataArchitecture | "hexagon",
-  string
-> = {
-  mips: "MIPS",
-  riscv: "RISC-V",
-  powerpc: "PowerPC",
-  hexagon: "Hexagon",
-};
-
 /** Families with no verified Hopper lane, declined before any loader selection. */
 export type HopperDeclinedArchitecture =
   | ElfMetadataArchitecture
   | "hexagon"
+  | "xtensa"
   | "arm64_32";
 
 export const isHopperDeclinedArchitecture = (
@@ -224,14 +215,20 @@ export const isHopperDeclinedArchitecture = (
 ): architecture is HopperDeclinedArchitecture =>
   isElfMetadataArchitecture(architecture) ||
   architecture === "hexagon" ||
+  architecture === "xtensa" ||
   architecture === "arm64_32";
 
+/**
+ * Hopper states only what it owns: it does not admit the family. It routes the
+ * caller to the Ghidra provider without restating or promising Ghidra's lane
+ * facts.
+ */
 export const hopperDeclinedArchitectureReason = (
   architecture: HopperDeclinedArchitecture,
 ): string =>
   architecture === "arm64_32"
     ? "REA's Hopper adapter has no verified arm64_32 lane."
-    : `REA's Hopper adapter does not admit ${HOPPER_DECLINED_ARCHITECTURE_LABELS[architecture]} targets. Select a verified Ghidra ${HOPPER_DECLINED_ARCHITECTURE_LABELS[architecture]} profile instead.`;
+    : `REA's Hopper adapter does not admit ${architecture} targets. Select the Ghidra provider instead.`;
 
 /** Derive Hopper's complete non-interactive CLI loader selection. */
 export const hopperLoaderArgsForTarget = (
@@ -397,8 +394,7 @@ const readHopperProfileFile = async <Value>(
     const diagnostics = { profile_file: { kind, path }, ...completed };
     const failure =
       cancellation !== undefined
-        ? new AnalysisCancelledError("open_binary", {
-            cause: cancellation.reason,
+        ? cancelledBy("open_binary", carriedReason(cancellation.reason), {
             cleanup,
             diagnostics,
           })

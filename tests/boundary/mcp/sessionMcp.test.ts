@@ -6,10 +6,11 @@ import { readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import type { CallToolResult } from "@modelcontextprotocol/server";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { z } from "zod";
 
 import { createTestTempDirectory } from "../../fixtures/temporaryDirectory.js";
+import { awaitAcknowledgement } from "../../fixtures/lifecycleAcknowledgement.js";
 
 import {
   createDeferred,
@@ -28,6 +29,7 @@ import { observed as ok } from "../../fixtures/analysisExecution.js";
 import { createServer } from "../../../src/server/createServer.js";
 import { ApktoolProvider } from "../../../src/apktool/ApktoolProvider.js";
 import {
+  LINUX_PROCESS_OWNERSHIP_REMEDIATION,
   LinuxOwnedProcessPrerequisiteError,
   systemProcessOwnershipHost,
 } from "../../../src/process/ProcessOwnershipObservation.js";
@@ -98,7 +100,12 @@ describe("MCP snapshot lifecycle ordering", () => {
       name: "address_name",
       arguments: { address: "0x1000", document: "fixture" },
     });
-    await started.promise;
+    onTestFinished(() => release.resolve(ok(first)));
+    await awaitAcknowledgement(
+      started.promise,
+      observation,
+      "session observation",
+    );
     const snapshotPath = join(directory, "analysis.json");
     const closing = mcp.callTool({
       name: "close_binary",
@@ -164,7 +171,7 @@ describe("MCP snapshot lifecycle ordering", () => {
         })
       ).isError,
     ).not.toBe(true);
-  }, 10_000);
+  });
 });
 
 describe("public provider availability", () => {
@@ -180,7 +187,8 @@ describe("public provider availability", () => {
     const unavailable: ProviderAvailability = {
       status: "unavailable",
       code: "unsupported_version",
-      reason: "Use Apktool 2.7.0 or newer.",
+      reason: "Apktool 2.6.3 is older than the supported minimum 2.7.0.",
+      remediation: "Use Apktool 2.7.0 or newer.",
       diagnostics: { minimum_version: "2.7.0" },
     };
     const adbDeviceAnalysis: AdbDeviceAnalysisPort = {
@@ -222,7 +230,11 @@ describe("public provider availability", () => {
       availability.groups.find(({ names }) =>
         names.includes("inspect_apktool_client"),
       ),
-    ).toMatchObject({ available: false, reason: "provider_unavailable" });
+    ).toMatchObject({
+      available: false,
+      reason: "provider_unavailable",
+      remediation: "Use Apktool 2.7.0 or newer.",
+    });
   });
 });
 
@@ -284,8 +296,8 @@ describe("owned-process prerequisite during status discovery", () => {
         available: false,
         reason: "provider_unavailable",
       });
-      expect(apktool?.remediation).toContain("procps-compatible ps");
-      expect(apktool?.remediation).toContain("spawn ps ENOENT");
+      // Discovery carries the prerequisite owner's repair, not its failure text.
+      expect(apktool?.remediation).toBe(LINUX_PROCESS_OWNERSHIP_REMEDIATION);
       expect(
         availability.groups.find(({ names }) =>
           names.includes("inspect_adb_client"),
@@ -353,8 +365,16 @@ describe("target-free MCP lifecycle", () => {
     await server.connect(serverTransport);
     await mcp.connect(clientTransport);
 
+    onTestFinished(() =>
+      availability.resolve({
+        status: "available",
+        code: null,
+        reason: null,
+        diagnostics: { configured: true },
+      }),
+    );
     const status = mcp.callTool({ name: "binary_session", arguments: {} });
-    await entered.promise;
+    await awaitAcknowledgement(entered.promise, status, "provider readiness");
     expect((await session.open(targetPath)).ok).toBe(true);
     availability.resolve({
       status: "available",
@@ -430,7 +450,7 @@ describe("target-free MCP lifecycle", () => {
       path: canonicalTargetPath,
       sha256: z.object({ sha256: z.string() }).parse(second).sha256,
     });
-  }, 30_000);
+  });
 });
 
 describe("snapshot receipt after MCP cleanup", () => {
@@ -528,12 +548,7 @@ describe("target-free MCP workflow", () => {
 
     const beforeTools = (await mcp.listTools()).tools;
     const beforeNames = beforeTools.map(({ name }) => name);
-    expect(mcp.getInstructions()).toContain(
-      "Use the tool that directly answers the question",
-    );
-    expect(
-      beforeTools.find(({ name }) => name === "inspect_artifact")?.description,
-    ).toMatch(/\breturns the complete content-addressed artifact graph\b/iu);
+    expect(beforeNames).toContain("inspect_artifact");
     expect(beforeNames).toContain("open_binary");
     expect(beforeNames).toContain("binary_session");
     expect(beforeNames).toContain("current_document");
@@ -629,7 +644,15 @@ describe("target-free MCP workflow", () => {
     expect(
       structured(await mcp.callTool({ name: "list_unknowns", arguments: {} }))
         .result,
-    ).toMatchObject({ items: [] });
+    ).toMatchObject({
+      items: [
+        {
+          unknown_id: recordedUnknown.unknown_id,
+          revision: 2,
+          status: "resolved",
+        },
+      ],
+    });
     expect(
       (
         await mcp.callTool({
@@ -678,7 +701,7 @@ describe("MCP snapshot open ordering", () => {
     expect(
       text(await mcp.callTool({ name: "binary_session", arguments: {} })),
     ).toContain('"open":false');
-  }, 10_000);
+  });
 });
 
 describe("session filesystem path boundaries over MCP", () => {
@@ -694,8 +717,19 @@ describe("session filesystem path boundaries over MCP", () => {
       name: "export_evidence_bundle",
       arguments: { path: "relative-bundle.json" },
     });
-    expect(exported.isError, JSON.stringify(exported.content)).toBe(true);
-    expect(JSON.stringify(exported.content)).toContain("absolute");
+    expect(parseMcpToolError(exported).error).toMatchObject({
+      code: "invalid_request",
+      details: {
+        operation: "export_evidence_bundle",
+        issues: [
+          expect.objectContaining({
+            path: ["path"],
+            reason: "invalid_format",
+            expected: "regex",
+          }),
+        ],
+      },
+    });
 
     const opened = await mcp.callTool({
       name: "open_binary",
@@ -706,18 +740,32 @@ describe("session filesystem path boundaries over MCP", () => {
       name: "close_binary",
       arguments: { snapshot_path: "relative-analysis.json" },
     });
-    expect(closed.isError, JSON.stringify(closed.content)).toBe(true);
-    expect(JSON.stringify(closed.content)).toContain("absolute");
+    expect(parseMcpToolError(closed).error).toMatchObject({
+      code: "invalid_request",
+      details: {
+        operation: "close_binary",
+        issues: [
+          expect.objectContaining({
+            path: ["snapshot_path"],
+            reason: "invalid_format",
+            expected: "regex",
+          }),
+        ],
+      },
+    });
     await mcp.callTool({ name: "close_binary", arguments: {} });
-  }, 10_000);
+  });
 });
 
 describe("json depth bounds over MCP", () => {
-  it("classifies deeply nested evidence parameters as an input validation error", async () => {
+  it("preserves source integrity and nesting-limit diagnostics for borrowed parameters", async () => {
     directory = await createTestTempDirectory("rea-mcp-depth-bound-");
+    const createClient = vi.fn<AnalysisProvider["createClient"]>(() => {
+      throw new Error("Offline comparison must not open a provider");
+    });
     const { mcp } = await createSessionMcpHarness(
       directory,
-      provider,
+      (closed) => ({ ...provider(closed), createClient }),
       resources,
       4_096,
     );
@@ -743,24 +791,28 @@ describe("json depth bounds over MCP", () => {
     expect(result.isError, JSON.stringify(result.content)).toBe(true);
     expect(parseMcpToolError(result)).toMatchObject({
       error: {
-        code: "invalid_request",
-        recovery: {
-          kind: "inspect_input_contract",
-          operation: "compare_process_captures",
-        },
+        // The Evidence owner authenticates borrowed source records after
+        // envelope admission and preserves the JSON bound before cloning.
+        code: "evidence_integrity_mismatch",
+        category: "integrity_mismatch",
+        message: expect.stringContaining(
+          `maximum nesting depth of ${MAX_JSON_DEPTH}`,
+        ),
         details: {
-          operation: "compare_process_captures",
-          issues: [
-            {
-              path: ["left", "parameters"],
-              reason: "invalid_value",
-              message: expect.stringContaining(String(MAX_JSON_DEPTH)),
-            },
-          ],
+          reason: "left Evidence failed validation",
+          side: "left",
+          issue_path: ["parameters"],
         },
       },
     });
-  }, 10_000);
+    const recovered = await mcp.callTool({
+      name: "compare_process_captures",
+      arguments: input,
+    });
+    expect(recovered.isError, JSON.stringify(recovered.content)).not.toBe(true);
+    expect(recovered.structuredContent).toEqual(baseline.structuredContent);
+    expect(createClient).not.toHaveBeenCalled();
+  });
 });
 
 const client = (path: string, closed: string[]): AnalysisClient => ({

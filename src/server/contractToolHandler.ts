@@ -17,11 +17,12 @@ import {
   requireAnalysisViewRetention,
   type AnalysisViewRetention,
 } from "../application/analysisView/AnalysisViewService.js";
-import type { AnalysisViewRequest } from "../domain/analysisView/analysisView.js";
+import type { AnalysisViewRequest } from "../domain/analysisView/analysisViewRequest.js";
 import type { EvidenceWriter } from "../application/investigation/InvestigationRecordPort.js";
 import type { ToolContract } from "../contracts/toolContractTypes.js";
 import type { AnalysisError } from "../domain/analysisErrorBase.js";
 import type { Evidence } from "../domain/evidence.js";
+import type { JsonValue } from "../domain/jsonValue.js";
 import { err, type Result } from "../domain/result.js";
 import { analysisInputErrorFromIssues } from "../domain/inputIssueProjection.js";
 import type { EvidenceMcpServer } from "./EvidenceMcpServer.js";
@@ -44,6 +45,7 @@ export const deliverEvidenceResult = (
   result: Result<Evidence, AnalysisError>,
   contract: ToolContract,
   recordEvidence?: EvidenceWriter["recordEvidence"],
+  viewSource?: JsonValue,
 ): CallToolResult => {
   if (!result.ok)
     return server.delivery.toPartialErrorToolResult(
@@ -52,7 +54,12 @@ export const deliverEvidenceResult = (
       recordEvidence,
     );
   const recorded = recordEvidence?.(result.value);
-  return server.delivery.toEvidenceToolResult(result.value, contract, recorded);
+  return server.delivery.toEvidenceToolResult(
+    result.value,
+    contract,
+    recorded,
+    viewSource,
+  );
 };
 
 /**
@@ -158,6 +165,8 @@ export const runEvidenceToolOperation = async <Input>(
     readonly logger: Logger;
     readonly recordEvidence: EvidenceWriter["recordEvidence"] | undefined;
     readonly withAdmittedAnalysis?: WithAdmittedAnalysis | undefined;
+    /** The source a view's overflow recovery may name again, when it has one. */
+    readonly viewSource?: ((input: Input) => JsonValue | undefined) | undefined;
   },
   contract: ToolContract,
   loadFailure: OptionalProviderLoadFailure | undefined,
@@ -193,6 +202,7 @@ export const runEvidenceToolOperation = async <Input>(
         result,
         contract,
         options.recordEvidence,
+        options.viewSource?.(input),
       );
     },
   );

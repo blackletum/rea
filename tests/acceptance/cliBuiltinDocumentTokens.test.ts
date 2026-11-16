@@ -7,7 +7,19 @@ workspaceCliTest(
   "applies token controls to SDK manifest and schema documents",
   async ({ cli }) => {
     const run = async (...arguments_: string[]) => {
-      const result = await cli.run({ arguments: arguments_ });
+      const invocation = { arguments: arguments_ };
+      const freshTokenCount = arguments_.join(" ") === "--llms --token-count";
+      const freshTokenLimit =
+        arguments_.join(" ") === "--llms-full --token-limit 1";
+      const result = await cli.run({
+        ...invocation,
+        freshProcess: !(
+          !freshTokenCount &&
+          !freshTokenLimit &&
+          (arguments_.includes("--token-count") ||
+            arguments_.includes("--token-limit"))
+        ),
+      });
       expect(result.exitCode, result.stderr).toBe(0);
       expect(result.stderr).toBe("");
       return result.stdout;

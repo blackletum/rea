@@ -1,5 +1,27 @@
-import { expect, it } from "vitest";
+import { AjvJsonSchemaValidator } from "@modelcontextprotocol/client/validators/ajv";
+import { expect, it, vi } from "vitest";
 import { createMcpSchemaValidation } from "../../fixtures/mcpSchemaValidation.js";
+
+it("compiles a listed tool's validator only when it first validates", () => {
+  // The SDK requests a validator for every listed tool before its first call.
+  const compile = vi.spyOn(AjvJsonSchemaValidator.prototype, "getValidator");
+  const validation = createMcpSchemaValidation();
+  try {
+    const listed = [
+      { type: "string" },
+      { type: "integer" },
+      { type: "boolean" },
+    ];
+    const validators = listed.map((schema) => validation.getValidator(schema));
+    expect(compile).not.toHaveBeenCalled();
+    expect(validators[1]?.(7).valid).toBe(true);
+    expect(validators[1]?.("seven").valid).toBe(false);
+    expect(compile).toHaveBeenCalledTimes(1);
+  } finally {
+    compile.mockRestore();
+    validation.clear();
+  }
+});
 
 it("reuses equal schemas and recompiles changed schemas sharing an id", () => {
   const validation = createMcpSchemaValidation();
@@ -7,7 +29,8 @@ it("reuses equal schemas and recompiles changed schemas sharing an id", () => {
     const schema = {
       $schema: "https://json-schema.org/draft/2020-12/schema",
       $id: "https://fixture.test/result",
-      type: "string" as "string" | "integer",
+      $defs: { value: { type: "string" as "string" | "integer" } },
+      $ref: "#/$defs/value",
     };
     const first = validation.getValidator(schema);
     expect(validation.getValidator(structuredClone(schema))).toBe(first);
@@ -16,7 +39,7 @@ it("reuses equal schemas and recompiles changed schemas sharing an id", () => {
     expect(validation.assertions.validate(schema, "recorded")).toBe(true);
     expect(validation.assertions.validate(schema, 42)).toBe(false);
 
-    schema.type = "integer";
+    schema.$defs.value.type = "integer";
     const changed = validation.getValidator(schema);
     expect(changed).not.toBe(first);
     expect(changed(42).valid).toBe(true);
@@ -31,13 +54,17 @@ it("reuses equal schemas and recompiles changed schemas sharing an id", () => {
   }
 });
 
-it("preserves SDK format validation and declared dialect dispatch", () => {
+it.each([
+  "https://json-schema.org/draft/2020-12/schema",
+  "https://json-schema.org/draft/2019-09/schema",
+  "http://json-schema.org/draft-07/schema#",
+])("preserves SDK format validation and references for %s", (dialect) => {
   const validation = createMcpSchemaValidation();
   try {
     const schema = {
-      $schema: "http://json-schema.org/draft-07/schema#",
-      type: "string",
-      format: "email",
+      $schema: dialect,
+      $defs: { address: { type: "string", format: "email" } },
+      $ref: "#/$defs/address",
     } as const;
     const validator = validation.getValidator(schema);
     expect(validator("analyst@example.test").valid).toBe(true);
