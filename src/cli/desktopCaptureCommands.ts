@@ -1,3 +1,4 @@
+import { HOST_PLATFORM } from "../platform/HostPlatform.js";
 import { desktopLibraryPolicyInputSchema } from "../domain/desktop/libraryPolicy.js";
 import { desktopViewPolicyInputSchema } from "../domain/desktop/desktopViewPolicy.js";
 import { safeParseJson } from "../domain/safeJson.js";
@@ -11,8 +12,10 @@ import type { DesktopStateReaders } from "../application/desktop/DesktopApplicat
 import { AnalysisError } from "../domain/analysisErrorBase.js";
 import { analysisErrorWithCleanupFailure } from "../domain/analysisErrorCleanup.js";
 import { ProviderCleanupError } from "../domain/providerCleanupError.js";
-import { ArtifactReaderFailure } from "../artifacts/ArtifactReader.js";
-import { bindArtifactFileCleanup } from "../artifacts/ArtifactFileOperation.js";
+import {
+  ArtifactReaderFailure,
+  bindArtifactFileCleanup,
+} from "../resources/index.js";
 import type { Evidence } from "../domain/evidence.js";
 import { localPathStringSchema } from "../domain/localPath.js";
 import { err, ok } from "../domain/result.js";
@@ -29,6 +32,7 @@ import {
 import { SessionRequestQueue } from "../desktop/DesktopSessionRequests.js";
 import { withCommandCancellation } from "./commandCancellation.js";
 import type { CliInstance } from "./types.js";
+import { writeCliProgressLine } from "./cliProgress.js";
 
 /** One coherent view policy; invalid JSON and unknown controls fail at admission. */
 const viewPolicyOption = z
@@ -550,7 +554,7 @@ export const registerDesktopCaptureCommands = (
                       : absoluteCallerPath(options.packageFile),
                 },
                 {
-                  platform: process.platform,
+                  platform: HOST_PLATFORM.platform,
                   environment,
                   callerDirectory: process.cwd(),
                   nextRequest: () => requests.next(),
@@ -562,7 +566,7 @@ export const registerDesktopCaptureCommands = (
                         ...(event === undefined ? {} : { event }),
                       },
                     };
-                    process.stderr.write(`${JSON.stringify(progress)}\n`);
+                    writeCliProgressLine(progress.rea_progress);
                   },
                 },
                 signal,

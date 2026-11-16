@@ -1,4 +1,8 @@
 import { z } from "zod";
+import {
+  coverageStatusSchema,
+  knownCoverageStatusSchema,
+} from "../coverage.js";
 
 import { javascriptSourceRangeSchema } from "./javascriptSourceCoordinates.js";
 
@@ -9,8 +13,8 @@ import {
 } from "./javascriptApplicationEvidenceSchemas.js";
 import { jsonValueSchema } from "../jsonValue.js";
 import { digestSchema, prefixedDigestSchema } from "../digests.js";
+import { nonEmptyTextSchema } from "../textSchemas.js";
 
-const boundedTextSchema = z.string().min(1);
 const semanticNodeIdSchema = prefixedDigestSchema("jsrg_node");
 const semanticRelationIdSchema = z
   .string()
@@ -278,7 +282,7 @@ export const javaScriptSemanticUnknownInputSchema = z.strictObject({
   family: z.enum(JAVASCRIPT_SEMANTIC_RELATION_FAMILIES),
   relation_kinds: z.array(z.enum(JAVASCRIPT_SEMANTIC_RELATIONS)).min(1),
   reason: z.enum(JAVASCRIPT_SEMANTIC_UNKNOWN_REASONS),
-  detail: boundedTextSchema,
+  detail: nonEmptyTextSchema,
   candidate_node_ids: z.array(semanticNodeIdSchema),
   evidence: applicationGraphEvidenceSchema,
 });
@@ -313,9 +317,9 @@ const fingerprintComponentsSchema = z.strictObject({
 export const javaScriptSemanticFingerprintInputSchema = z.strictObject({
   function_node_id: semanticNodeIdSchema,
   algorithm: z.literal("rea.javascript-semantic-function"),
-  status: z.enum(["complete", "partial", "unavailable"]),
+  status: z.enum([...knownCoverageStatusSchema.options, "unavailable"]),
   components: fingerprintComponentsSchema,
-  limitations: z.array(boundedTextSchema),
+  limitations: z.array(nonEmptyTextSchema),
   evidence: applicationGraphEvidenceSchema,
 });
 
@@ -329,14 +333,14 @@ export const javaScriptSemanticFingerprintSchema =
 
 const familyCoverageSchema = z.strictObject({
   family: z.enum(JAVASCRIPT_SEMANTIC_RELATION_FAMILIES),
-  status: z.enum(["complete", "partial", "unknown", "unsupported"]),
+  status: z.enum([...coverageStatusSchema.options, "unsupported"]),
   retained_relations: z.int().min(0),
   omitted_relations: z.int().min(0).nullable(),
   unknown_ids: z.array(semanticUnknownIdSchema),
 });
 
 const graphCoverageSchema = z.strictObject({
-  status: z.enum(["complete", "partial", "unknown", "unavailable"]),
+  status: z.enum([...coverageStatusSchema.options, "unavailable"]),
   truncated: z.boolean(),
   omitted_unknown_occurrences:
     javaScriptSemanticUnknownOmissionsSchema.exactOptional(),
@@ -364,7 +368,7 @@ export const javaScriptSemanticGraphInputSchema = z.strictObject({
   fingerprints: z.array(javaScriptSemanticFingerprintSchema),
   unknowns: z.array(javaScriptSemanticUnknownSchema),
   coverage: graphCoverageSchema,
-  limitations: z.array(boundedTextSchema),
+  limitations: z.array(nonEmptyTextSchema),
 });
 
 /** Stored JavaScript Semantic Relation Graph. */

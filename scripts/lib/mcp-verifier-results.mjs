@@ -1,6 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { authenticateParsedEvidenceBundle } from "../../dist/domain/evidenceBundle.js";
-import { analysisErrorProjectionSchema } from "../../dist/contracts/errorSchemas.js";
+import { analysisErrorProjectionSchema } from "../../dist/domain/analysisErrorProjectionSchema.js";
 import { toolContract } from "../../dist/contracts/toolContracts.js";
 import {
   expandProviderCapabilities,
@@ -78,7 +78,7 @@ export const expandMcpSessionStatus = (status) => ({
 });
 
 /** Expand provider capability groups while retaining candidate identity/state. */
-export const expandProviderCandidates = (candidates) =>
+const expandProviderCandidates = (candidates) =>
   candidates.map((candidate) => ({
     ...candidate,
     capabilities: expandProviderCapabilities(

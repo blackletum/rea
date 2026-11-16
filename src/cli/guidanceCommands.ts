@@ -1,5 +1,5 @@
 import { z } from "incur";
-import { ArtifactResourceScope } from "../artifacts/ArtifactResourceScope.js";
+import { ArtifactResourceScope } from "../resources/index.js";
 import {
   readGuidanceSection,
   searchGuidance,
@@ -15,6 +15,7 @@ import { projectAnalysisError } from "../domain/analysisErrorProjection.js";
 import type { Logger } from "pino";
 import type { CliInstance } from "./types.js";
 import { cliDecimalField } from "./options.js";
+import { ownCliProcessResource } from "./cliResources.js";
 
 /** Guidance descriptors owned by one CLI host. */
 export class CliGuidanceResources {
@@ -41,6 +42,8 @@ const processGuidanceResources = new CliGuidanceResources();
 export const closeCliGuidanceResources = (
   resources: CliGuidanceResources = processGuidanceResources,
 ): Promise<void> => resources.close();
+
+ownCliProcessResource("guidance", () => closeCliGuidanceResources());
 
 /** Register offline search and retrieval for the installed REA guide bundle. */
 export const registerGuidanceCommands = (

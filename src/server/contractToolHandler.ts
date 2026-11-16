@@ -5,19 +5,19 @@ import type {
 import type { Logger } from "pino";
 import type { z } from "zod";
 
-import type { ProgressReporter } from "../application/ProgressReporter.js";
+import type { ProgressReporter } from "../ports/ProgressReporter.js";
 import {
   optionalProviderUnavailable,
   type OptionalProviderLoadFailure,
-} from "../application/OptionalObservationProviders.js";
+} from "../ports/OptionalObservationProviders.js";
 import { mcpProgressReporter } from "./mcpProgress.js";
-import type { ExecutionOptions } from "../application/AnalysisProvider.js";
+import type { ExecutionOptions } from "../ports/AnalysisProvider.js";
 import {
   projectRetainedAnalysis,
   requireAnalysisViewRetention,
   type AnalysisViewRetention,
 } from "../application/analysisView/AnalysisViewService.js";
-import type { AnalysisViewRequest } from "../domain/analysisView/analysisView.js";
+import type { AnalysisViewRequest } from "../domain/analysisView/analysisViewRequest.js";
 import type { EvidenceWriter } from "../application/investigation/InvestigationRecordPort.js";
 import type { ToolContract } from "../contracts/toolContractTypes.js";
 import type { AnalysisError } from "../domain/analysisErrorBase.js";
@@ -136,7 +136,10 @@ export const createRetainedSummaryToolHandler = <
   )(contract);
 };
 
-/** Bind a named Evidence-producing operation to shared logging and delivery. */
+/**
+ * Bind a named Evidence-producing operation to shared logging and delivery.
+ * The operation receives the request signal and its MCP progress reporter.
+ */
 export const createEvidenceToolHandler =
   (
     server: EvidenceMcpServer,
@@ -155,7 +158,7 @@ export const createEvidenceToolHandler =
       contract,
       undefined,
       { input, context },
-      (selected, { signal }) => operation(selected, { signal }),
+      operation,
     );
 
 /** One owner for optional-provider admission, execution, recording and delivery. */

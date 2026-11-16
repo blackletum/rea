@@ -15,11 +15,11 @@ import type {
 import { expect, it, onTestFinished, vi } from "vitest";
 import { awaitAcknowledgement } from "../../fixtures/lifecycleAcknowledgement.js";
 
-import { FridaScriptLoadCancelledError } from "../../../src/application/frida/FridaInstrumentationPort.js";
+import { FridaScriptLoadCancelledError } from "../../../src/ports/frida/FridaInstrumentationPort.js";
 import type {
   FridaInstrumentationPort,
   FridaScriptObservation,
-} from "../../../src/application/frida/FridaInstrumentationPort.js";
+} from "../../../src/ports/frida/FridaInstrumentationPort.js";
 import type { EvidenceWriter } from "../../../src/application/investigation/InvestigationRecordPort.js";
 import { toolContract } from "../../../src/contracts/toolContracts.js";
 import {
@@ -44,6 +44,7 @@ import { ToolResultDelivery } from "../../../src/server/ToolResultDelivery.js";
 import { createToolResultDelivery } from "../../../src/server/toolResult.js";
 import { createTestBinarySession } from "../../fixtures/binarySession.js";
 import { parseMcpToolError } from "../../fixtures/mcpToolError.js";
+import { waitFor } from "../../support/testWait.js";
 
 const gate = () => {
   let markEntered = () => {};
@@ -486,7 +487,7 @@ it.each([
     const serverReason: unknown = serverSignal?.reason;
     held.release();
     const result = await pending;
-    await vi.waitFor(() =>
+    await waitFor(() =>
       expect(success.mock.calls.length + partial.mock.calls.length).toBe(1),
     );
     expect(fixture.controls.detachCalls).toBe(1);
@@ -629,7 +630,7 @@ it("preserves the native resume failure after MCP cancellation reaches the serve
   expect(serverSignal?.aborted).toBe(true);
   held.release();
   await pending;
-  await vi.waitFor(() => expect(delivery).toHaveBeenCalledOnce());
+  await waitFor(() => expect(delivery).toHaveBeenCalledOnce());
   expect(delivery.mock.calls[0]?.[0]).toMatchObject({
     _tag: "AnalysisCapabilityUnavailableError",
     operation: "resume_frida_session",

@@ -10,6 +10,7 @@ import {
   electronMemberPath,
 } from "./javascriptElectronMemberWrites.js";
 import { createSemanticModuleInterop } from "./javascriptModuleInterop.js";
+import { ambientEffectCovers } from "./javascriptSemanticEffectLog.js";
 import {
   resolveSemanticBindingState,
   semanticStableInitializer,
@@ -21,14 +22,9 @@ import {
   semanticDefiniteEffectPrecedesReference,
   semanticEffectTiming,
 } from "./javascriptSemanticMutationInitializers.js";
-import {
-  semanticIterationSources,
-  type SemanticIterationSource,
-} from "./javascriptSemanticIterationSources.js";
-import {
-  joinSemanticPropertyPaths,
-  semanticPropertyPathKeyMatches,
-} from "./javascriptSemanticPropertyPaths.js";
+import { semanticIterationSources } from "./javascriptSemanticIterationSources.js";
+import type { SemanticIterationSource } from "./javascriptSemanticIterationFacts.js";
+import { joinSemanticPropertyPaths } from "./javascriptSemanticPropertyPaths.js";
 import { createSemanticReturnedReferences } from "./javascriptSemanticReturnedReferences.js";
 import {
   GLOBAL_OBJECT_NAMES,
@@ -42,11 +38,6 @@ import {
 } from "./javascriptSemanticReferenceSources.js";
 import { semanticCopiedReferencePath } from "./javascriptSemanticCopiedReferencePaths.js";
 
-export {
-  isUnmodifiedGlobalReference,
-  isUnmodifiedImportMetaUrl,
-} from "./javascriptSemanticGlobalReference.js";
-
 /** Global self references retain object identity, rather than adding a property. */
 const canonicalAmbientPath = (
   path: readonly (string | null)[],
@@ -59,15 +50,6 @@ const canonicalAmbientPath = (
 };
 
 type AmbientPath = readonly (string | null)[];
-
-const ambientEffectCovers = (
-  effect: JavaScriptSemanticAnalysisState["ambientWriteEffects"][number],
-  target: readonly string[],
-): boolean =>
-  effect.path.length <= target.length &&
-  effect.path.every((key, index) =>
-    semanticPropertyPathKeyMatches(key, target[index]!),
-  );
 
 const retainedAmbientEffects = new WeakMap<
   JavaScriptSemanticAnalysisState,

@@ -1,13 +1,7 @@
+import { SIMULATED_LINUX_X64 } from "../fixtures/simulatedHost.js";
 import { access, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import {
-  afterEach,
-  beforeAll,
-  beforeEach,
-  expect,
-  it,
-  onTestFinished,
-} from "vitest";
+import { beforeAll, expect, it, onTestFinished } from "vitest";
 
 import { PwntoolsLayoutProvider } from "../../src/native/pwntools/PwntoolsLayoutProvider.js";
 import { PrivateRuntimeRoot } from "../../src/process/PrivateRuntimeRoot.js";
@@ -22,28 +16,11 @@ import {
   removeTestWorkspace,
 } from "../support/workspace/workspaceFixture.js";
 
-const platform = Object.getOwnPropertyDescriptor(process, "platform");
-const architecture = Object.getOwnPropertyDescriptor(process, "arch");
 const supportedHost = process.platform !== "win32";
 
 beforeAll(() =>
   supportedHost ? prepareProcessOwnershipInspection() : undefined,
 );
-
-// Only the decoder's availability gate is simulated. The module-owned process
-// inspector was created and prepared for the real host before these overrides;
-// every fixture launch, output stream, cleanup signal and filesystem is real.
-beforeEach(() => {
-  Object.defineProperty(process, "platform", { value: "linux" });
-  Object.defineProperty(process, "arch", { value: "x64" });
-});
-
-afterEach(() => {
-  if (platform !== undefined)
-    Object.defineProperty(process, "platform", platform);
-  if (architecture !== undefined)
-    Object.defineProperty(process, "arch", architecture);
-});
 
 const fixture = async () => {
   const workspace = await createTestWorkspace("rea-pwntools-cleanup-");
@@ -102,6 +79,7 @@ it.runIf(supportedHost)(
           },
         };
       },
+      SIMULATED_LINUX_X64,
     );
     onTestFinished(async () => {
       cleanupAllowed = true;
@@ -118,7 +96,7 @@ it.runIf(supportedHost)(
       capturedOutput: { truncated: true },
       diagnostics: {
         primary_error: {
-          code: "unreadable_output",
+          code: "resource_constraint",
         },
         cleanup_error: { code: "cleanup_incomplete" },
       },
@@ -202,6 +180,7 @@ it.runIf(supportedHost)(
           await root.close();
         },
       }),
+      SIMULATED_LINUX_X64,
     );
     onTestFinished(async () => {
       removalAllowed = true;
@@ -213,11 +192,9 @@ it.runIf(supportedHost)(
       throw new Error("Expected command and root-removal failures");
     expect(result.error).toMatchObject({
       cleanupIncomplete: true,
+      capturedOutput: { stdout: "retained diagnostic" },
       diagnostics: {
-        primary_error: {
-          code: "execution_failure",
-          details: { diagnostics: { stdout: "retained diagnostic" } },
-        },
+        primary_error: { code: "execution_failure" },
         cleanup_error: { code: "cleanup_incomplete" },
       },
     });
@@ -260,13 +237,14 @@ it.runIf(supportedHost)(
       },
       () =>
         PrivateRuntimeRoot.create({ parent: workspace.root, prefix: "owned-" }),
+      SIMULATED_LINUX_X64,
     );
     onTestFinished(async () => {
       release?.();
       await provider.close();
     });
     const first = provider.inspect({ path });
-    await awaitAcknowledgement(started, first, "pwntools launch", 10_000);
+    await awaitAcknowledgement(started, first, "pwntools launch");
     const controller = new AbortController();
     const cancelled = provider.inspect({ path }, { signal: controller.signal });
     const reason = { stage: "queued" };
