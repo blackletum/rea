@@ -9,6 +9,7 @@ import { open, writeFile, type FileHandle } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { ZipReader } from "@zip.js/zip.js";
 
 const fault = vi.hoisted(() => ({
   path: "",
@@ -111,13 +112,20 @@ import { ArtifactReaderFailure } from "../../src/resources/ArtifactReader.js";
 import { GoBinaryProvider } from "../../src/go/GoBinaryProvider.js";
 import { PythonPycProvider } from "../../src/python/PythonPycProvider.js";
 import { inspectPythonPycInputSchema } from "../../src/domain/python/pythonPyc.js";
+import { NugetNupkgProvider } from "../../src/nuget/NugetNupkgProvider.js";
+import { NugetNupkgService } from "../../src/application/nuget/NugetNupkgService.js";
+import { nugetNupkgFixture } from "../../src/nuget/NugetNupkg.fixture.js";
+import { inspectNugetNupkgInputSchema } from "../../src/domain/nuget/nupkg.js";
 import { PeResourcesProvider } from "../../src/native/pe/PeResourcesProvider.js";
 import { Il2cppMetadataProvider } from "../../src/il2cpp/Il2cppMetadataProvider.js";
 import { ElfNotesProvider } from "../../src/native/elf/ElfNotesProvider.js";
+import { DwarfUnitsProvider } from "../../src/native/dwarf/DwarfUnitsProvider.js";
 import { NativeInitializersProvider } from "../../src/native/initializers/NativeInitializersProvider.js";
 import { ElfUnwindRangesProvider } from "../../src/native/elf/ElfUnwindRangesProvider.js";
 import { AppleIpsProvider } from "../../src/native/apple/AppleIpsProvider.js";
 import { KernelModuleProvider } from "../../src/native/elf/KernelModuleProvider.js";
+import { ElfDebugLinkProvider } from "../../src/native/elf/ElfDebugLinkProvider.js";
+import { ElfDependenciesProvider } from "../../src/native/elf/ElfDependenciesProvider.js";
 import { KernelBuildConfigProvider } from "../../src/native/elf/KernelBuildConfigProvider.js";
 import { PeCertificatesProvider } from "../../src/native/pe/PeCertificatesProvider.js";
 import { PeImportsProvider } from "../../src/native/pe/PeImportsProvider.js";
@@ -125,10 +133,13 @@ import { WindowsShortcutProvider } from "../../src/native/windows/WindowsShortcu
 import { NativeExportsProvider } from "../../src/native/exports/NativeExportsProvider.js";
 import { BeamProvider } from "../../src/erlang/BeamProvider.js";
 import { inspectElfNotesInputSchema } from "../../src/domain/native/elfNotes.js";
+import { inspectDwarfUnitsInputSchema } from "../../src/domain/native/dwarfUnits.js";
 import { inspectNativeInitializersInputSchema } from "../../src/domain/native/nativeInitializers.js";
 import { inspectElfUnwindRangesInputSchema } from "../../src/domain/native/elfUnwindRanges.js";
 import { inspectAppleIpsInputSchema } from "../../src/domain/native/appleIps.js";
 import { inspectKernelModuleInputSchema } from "../../src/domain/native/kernelModule.js";
+import { inspectElfDebugLinkInputSchema } from "../../src/domain/native/elfDebugLink.js";
+import { inspectElfDependenciesInputSchema } from "../../src/domain/native/elfDependencies.js";
 import { inspectKernelBuildConfigInputSchema } from "../../src/domain/native/kernelBuildConfig.js";
 import { inspectPeCertificatesInputSchema } from "../../src/domain/native/peCertificates.js";
 import { inspectPeImportsInputSchema } from "../../src/domain/native/peImports.js";
@@ -163,6 +174,88 @@ const staticProviders = [
   ["PE", () => new PeResourcesProvider()],
   ["IL2CPP metadata", () => new Il2cppMetadataProvider()],
 ] as const;
+
+it("preserves opaque NuGet decoder failures and the completed file identity", async () => {
+  const path = await selectedImage();
+  const bytes = await nugetNupkgFixture();
+  await writeFile(path, bytes);
+  fault.blockNew = false;
+  const cause = new Error("controlled decoder runtime failure");
+  const enumeration = vi
+    .spyOn(ZipReader.prototype, "getEntriesGenerator")
+    .mockImplementation(async function* () {
+      throw cause;
+    });
+  const provider = new NugetNupkgProvider();
+  try {
+    const result = await provider.inspect(
+      inspectNugetNupkgInputSchema.parse({ path }),
+    );
+    if (result.ok) throw new Error("Expected opaque decoder failure");
+    expect(result.error._tag).toBe("ArtifactOperationError");
+    expect(result.error.cause).toBe(cause);
+    expect(result.error.cleanupIncomplete).toBe(false);
+    expect(result.error.partialObservation).toEqual({
+      kind: "file-snapshot-hash",
+      path,
+      sha256: createHash("sha256").update(bytes).digest("hex"),
+      bytes: bytes.length,
+    });
+    expect(fault.handles).toHaveLength(1);
+    expect(fault.handles[0]?.fd).toBe(-1);
+  } finally {
+    enumeration.mockRestore();
+    await provider.close();
+  }
+});
+
+it.each(["close failure", "close cancellation"])(
+  "retains only the completed NuGet file snapshot through %s and cleanup retry",
+  async (outcome) => {
+    const path = await selectedImage();
+    const bytes = await nugetNupkgFixture();
+    await writeFile(path, bytes);
+    const controller = new AbortController();
+    const reason = { source: "NuGet file finalization" };
+    if (outcome === "close cancellation")
+      fault.onClose = () => controller.abort(reason);
+    const service = new NugetNupkgService(new NugetNupkgProvider());
+    try {
+      const result = await service.inspect(
+        { path },
+        { signal: controller.signal },
+      );
+      if (result.ok)
+        throw new Error("Expected descriptor finalization failure");
+      expect(result.error.cleanupIncomplete).toBe(true);
+      expect(result.error.partialObservation).toEqual({
+        kind: "file-snapshot-hash",
+        path,
+        sha256: createHash("sha256").update(bytes).digest("hex"),
+        bytes: bytes.length,
+      });
+      const beforeCleanup = projectAnalysisError(result.error).details
+        ?.partial_observation;
+      if (outcome === "close cancellation")
+        expect(result.error.cleanupPrimary?.cause).toBe(reason);
+      await expect(service.close()).rejects.toBeDefined();
+      expect(result.error.cleanupIncomplete).toBe(true);
+      fault.blocked.clear();
+      await service.close();
+      expect(result.error.cleanupIncomplete).toBe(false);
+      expect(
+        projectAnalysisError(resolvedAnalysisError(result.error)).details
+          ?.partial_observation,
+      ).toEqual(beforeCleanup);
+      expect(fault.handles).toHaveLength(1);
+      expect(fault.handles[0]?.fd).toBe(-1);
+    } finally {
+      fault.onClose = undefined;
+      fault.blocked.clear();
+      await service.close();
+    }
+  },
+);
 
 it.each(
   ["Rust service", "selected producer input", "source map"].flatMap(
@@ -1013,10 +1106,13 @@ it.each([
 const stableArtifactProviders = [
   ...staticProviders,
   ["ELF notes", () => new ElfNotesProvider()],
+  ["DWARF units", () => new DwarfUnitsProvider()],
   ["native initializers", () => new NativeInitializersProvider()],
   ["ELF unwind ranges", () => new ElfUnwindRangesProvider()],
   ["Apple IPS", () => new AppleIpsProvider()],
   ["kernel module", () => new KernelModuleProvider()],
+  ["ELF debug link", () => new ElfDebugLinkProvider()],
+  ["ELF dependencies", () => new ElfDependenciesProvider()],
   ["kernel build config", () => new KernelBuildConfigProvider()],
   ["PE certificates", () => new PeCertificatesProvider()],
   ["PE load configuration", () => new PeLoadConfigProvider()],
@@ -1026,6 +1122,7 @@ const stableArtifactProviders = [
   ["Windows shortcut", () => new WindowsShortcutProvider()],
   ["native exports", () => new NativeExportsProvider()],
   ["Python pyc", () => new PythonPycProvider()],
+  ["NuGet nupkg", () => new NugetNupkgProvider()],
 ] as const;
 
 const fileFailureProviders = [
@@ -1039,6 +1136,11 @@ const inspectFileFailure = (
   signal?: AbortSignal,
 ) => {
   const options = signal === undefined ? undefined : { signal };
+  if (provider instanceof NugetNupkgProvider)
+    return provider.inspect(
+      inspectNugetNupkgInputSchema.parse({ path }),
+      options,
+    );
   if (provider instanceof PythonPycProvider)
     return provider.inspect(
       inspectPythonPycInputSchema.parse({ path }),
@@ -1047,6 +1149,11 @@ const inspectFileFailure = (
   if (provider instanceof ElfNotesProvider)
     return provider.inspect(
       inspectElfNotesInputSchema.parse({ path }),
+      options,
+    );
+  if (provider instanceof DwarfUnitsProvider)
+    return provider.inspect(
+      inspectDwarfUnitsInputSchema.parse({ path }),
       options,
     );
   if (provider instanceof NativeInitializersProvider)
@@ -1067,6 +1174,16 @@ const inspectFileFailure = (
   if (provider instanceof KernelModuleProvider)
     return provider.inspect(
       inspectKernelModuleInputSchema.parse({ path }),
+      options,
+    );
+  if (provider instanceof ElfDebugLinkProvider)
+    return provider.inspect(
+      inspectElfDebugLinkInputSchema.parse({ path }),
+      options,
+    );
+  if (provider instanceof ElfDependenciesProvider)
+    return provider.inspect(
+      inspectElfDependenciesInputSchema.parse({ path }),
       options,
     );
   if (provider instanceof KernelBuildConfigProvider)
@@ -1147,11 +1264,15 @@ it.each(
       expect(result.error._tag).toBe(
         expectedTag ??
           (provider instanceof ElfNotesProvider ||
+          provider instanceof DwarfUnitsProvider ||
           provider instanceof ElfUnwindRangesProvider ||
           provider instanceof KernelModuleProvider ||
+          provider instanceof ElfDebugLinkProvider ||
+          provider instanceof ElfDependenciesProvider ||
           provider instanceof KernelBuildConfigProvider ||
           provider instanceof PeCertificatesProvider ||
-          provider instanceof PeResourcesProvider
+          provider instanceof PeResourcesProvider ||
+          provider instanceof NugetNupkgProvider
             ? "ArtifactOperationError"
             : "ProviderAdapterError"),
       );
