@@ -300,6 +300,22 @@ describe("CLI startup imports", () => {
     ).resolves.toEqual(new Set(["javascript-application"]));
   });
 
+  it("loads native provider composition when a provider operation is called", async () => {
+    const resolved = await resolvedPackages(
+      evaluate(
+        'const { createDirectAnalysis } = await import("./dist/composition/directAnalysis.js"); await createDirectAnalysis({}).runSessionStatus();',
+      ),
+    );
+    expect(resolved).toContain("binary-composition");
+    expect(resolved).not.toContain("direct-analysis");
+    expect(resolved).toContain("direct-analysis-status");
+    expect(resolved).toContain("server-identity");
+    expect(resolved).toContain("catalog-identity");
+    expect(resolved).toContain("tool-contracts");
+  });
+});
+
+describe("CLI one-shot command imports", () => {
   it("loads only the selected diagnostic factory for a standalone command", async () => {
     const directory = await createTestTempDirectory(
       "rea-cli-diagnostics-imports-",
@@ -348,20 +364,6 @@ describe("CLI startup imports", () => {
         "evidence-bundle-commands",
       ]),
     );
-  });
-
-  it("loads native provider composition when a provider operation is called", async () => {
-    const resolved = await resolvedPackages(
-      evaluate(
-        'const { createDirectAnalysis } = await import("./dist/composition/directAnalysis.js"); await createDirectAnalysis({}).runSessionStatus();',
-      ),
-    );
-    expect(resolved).toContain("binary-composition");
-    expect(resolved).not.toContain("direct-analysis");
-    expect(resolved).toContain("direct-analysis-status");
-    expect(resolved).toContain("server-identity");
-    expect(resolved).toContain("catalog-identity");
-    expect(resolved).toContain("tool-contracts");
   });
 });
 
