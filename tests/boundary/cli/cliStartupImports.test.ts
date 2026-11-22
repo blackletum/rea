@@ -15,6 +15,25 @@ const MARKER = "REA_TEST_RESOLVED ";
 // must not resolve them just to register the complete command catalog.
 const DEFERRED_IMPORTS = [
   {
+    name: "inspect-byte-entropy",
+    path: "/dist/composition/binaryDiagnostics/byteEntropy.js",
+  },
+  {
+    name: "analysis-view-result",
+    path: "/dist/domain/analysisView/analysisViewResult.js",
+    chunk: "analysisViewResult",
+  },
+  {
+    name: "analysis-view-service",
+    path: "/dist/application/analysisView/AnalysisViewService.js",
+    chunk: "AnalysisViewService",
+  },
+  {
+    name: "evidence-bundle-commands",
+    path: "/dist/application/EvidenceBundleCommands.js",
+    chunk: "EvidenceBundleCommands",
+  },
+  {
     name: "guided-workflows",
     path: "/dist/application/GuidedWorkflowAccess.js",
   },
@@ -140,6 +159,7 @@ registerHooks({
     const resolved = next(specifier, context);
     const name = imports.find((item) =>
       resolved.url.includes(item.path) ||
+      (item.chunk !== undefined && resolved.url.includes("/dist/cli-runtime/" + item.chunk + "-")) ||
       (item.path.startsWith("/dist/") && item.path.endsWith(".js") &&
        resolved.url.includes("/dist/cli-runtime/" + item.path.slice(6, -3).split("/").join("__") + "-")),
     );
@@ -224,12 +244,18 @@ describe("CLI startup imports", () => {
   });
 
   it("does not load command-specific code to register the command catalog", async () => {
-    await expect(
-      resolvedPackages(["scripts/rea.mjs", "--help"]),
-    ).resolves.toEqual(new Set());
-    await expect(
-      resolvedPackages(evaluate('await import("./dist/cli.js");')),
-    ).resolves.toEqual(new Set());
+    // Full registration loads command descriptions from families that use
+    // Evidence views themselves. Exercise delivery imports on one-shot runs.
+    for (const args of [
+      ["scripts/rea.mjs", "--help"],
+      evaluate('await import("./dist/cli.js");'),
+    ]) {
+      const resolved = await resolvedPackages(args);
+      for (const item of DEFERRED_IMPORTS) {
+        if ("chunk" in item) continue;
+        expect(resolved).not.toContain(item.name);
+      }
+    }
   });
 
   it("renders guidance without loading the tool catalog or provider composition", async () => {
@@ -272,6 +298,56 @@ describe("CLI startup imports", () => {
         "--json",
       ]),
     ).resolves.toEqual(new Set(["javascript-application"]));
+  });
+
+  it("loads only the selected diagnostic factory for a standalone command", async () => {
+    const directory = await createTestTempDirectory(
+      "rea-cli-diagnostics-imports-",
+    );
+    const input = join(directory, "bytes");
+    await writeFile(input, "Some bytes to inspect.");
+    await expect(
+      resolvedPackages([
+        "scripts/rea.mjs",
+        "inspect-byte-entropy",
+        input,
+        "--json",
+      ]),
+    ).resolves.toEqual(new Set(["inspect-byte-entropy"]));
+  });
+
+  it("loads summary projection and bundle delivery only when requested", async () => {
+    const source = await createTestTempDirectory("rea-cli-js-summary-imports-");
+    await writeFile(join(source, "index.js"), "export const answer = 42;\n");
+    const command = [
+      "scripts/rea.mjs",
+      "analyze-javascript-application",
+      source,
+      "--json",
+    ];
+    const output = join(
+      await createTestTempDirectory("rea-cli-js-delivery-"),
+      "evidence.json",
+    );
+    await expect(resolvedPackages(command)).resolves.toEqual(
+      new Set(["javascript-application"]),
+    );
+    await expect(
+      resolvedPackages([
+        ...command,
+        "--detail",
+        "summary",
+        "--evidence_output",
+        output,
+      ]),
+    ).resolves.toEqual(
+      new Set([
+        "javascript-application",
+        "analysis-view-result",
+        "analysis-view-service",
+        "evidence-bundle-commands",
+      ]),
+    );
   });
 
   it("loads native provider composition when a provider operation is called", async () => {
